@@ -1,0 +1,185 @@
+# 03 外观系统
+
+外观由四样东西组成：**主题**（颜色）、**字体**、**背景**、**窗口**。每样都有合理的默认值，都可以全局设置，也可以按"配置档"（profile，比如"日常""服务器""演示"）单独覆盖。
+
+具体配色、间距、各区域尺寸见 [08 美术风格与版面](08-art-direction.md)，这一篇讲"系统怎么设计"。
+
+## 1. 主题
+
+### 一个主题文件长什么样
+
+```jsonc
+{
+  "$schema": "https://…/schema/theme.schema.json",
+  "name": "moon-paper",
+  "displayName": "月白 Moon Paper",
+  "kind": "light",                 // light | dark，决定一些自动处理的方向
+  "extends": null,                 // 可以继承另一个主题，只写想改的部分
+  "terminal": {                    // 终端区域的 16 色 + 前景/背景/光标/选区
+    "background": "#FAF8F3",
+    "foreground": "#3A3833",
+    "cursor": "#5B6FA8",
+    "selectionBackground": "#DCE3F2",
+    "black": "#3A3833", "red": "#B23A2E", "…": "…"
+  },
+  "ui": {                          // 界面颜色（标签栏、面板、按钮……）
+    "surface0": "#FAF8F3",         // 最底层：窗口和终端背景
+    "surface1": "#F2EFE7",         // 第二层：标签栏、侧栏、面板
+    "surface2": "#E9E5DA",         // 第三层：悬停、按下、输入框
+    "border": "#DEDACD",
+    "text": "#2F2D29",
+    "textMuted": "#68645A",
+    "accent": "#5B6FA8",
+    "accentSoft": "#E3E7F3",
+    "onAccent": "#FFFFFF",
+    "success": "#3E7330", "warning": "#8A6410", "danger": "#B23A2E"
+  },
+  "overrides": {                   // 可选：单独改某个组件
+    "tab.active.background": "#FFFFFF",
+    "agentWidget.background": "#FFFFFFE6"
+  }
+}
+```
+
+内置主题的完整文件在 [`design/themes/`](../design/themes/)。
+
+### 两层颜色
+
+- **基础色**（`terminal` + `ui`）：十几个，普通用户改这些就够了。
+- **组件色**（`overrides`）：每个组件的每个状态都有一个名字，比如 `tab.active.background`、`panel.item.hover`。不写就从基础色推导。完整列表放在 JSON Schema 里，编辑器能自动补全。
+
+推导规则举例：
+
+| 组件色 | 默认取值 |
+| --- | --- |
+| `tab.active.background` | `surface0` |
+| `tab.hover.background` | `surface2` |
+| `tab.indicator` | `accent` |
+| `panel.background` | `surface1`，有背景图时加 85% 不透明度 |
+| `panel.item.selected` | `accentSoft` |
+| `scrollbar.thumb` | `text` 的 25% 不透明度 |
+
+### 浅色主题的专门处理
+
+浅色终端最常见的问题和对策：
+
+| 问题 | 对策 |
+| --- | --- |
+| 程序假设背景是黑的，输出白色或黄色文字，在浅色背景上看不见 | ① 主题里的 `white`/`brightWhite` 本身就是中灰色；② 开着 `minimumContrastRatio`，不够清楚的颜色自动加深 |
+| 选中文字后看不清 | 选区用浅的强调色，并检查选区上文字的对比度 |
+| 光标太淡找不到 | 光标用强调色，不用前景色；可选"光标闪烁时带光晕" |
+| 背景图让文字发花 | 背景图默认加一层和底色相同的半透明蒙版（见第 3 节） |
+| 长时间看纯白刺眼 | 内置主题都不用纯白 `#FFFFFF` 做底，都带一点暖、冷或粉的色调 |
+
+所有内置主题都要通过 `tools/check_contrast.py` 的检查：正文 ≥ 7:1，普通 ANSI 色 ≥ 4.5:1，次要文字 ≥ 3:1。用户自定义主题在主题编辑器里实时显示对比度，不达标会标黄提醒（不强制）。
+
+### 跟随系统
+
+设置项 `theme` 可以是一个名字，也可以是一对：
+
+```jsonc
+"theme": { "light": "moon-paper", "dark": "night-voyage", "follow": "system" }
+```
+
+`follow` 可选 `system`（跟随 Windows 浅色/深色设置）、`time`（按日出日落或自定义时间切换）、`off`。
+
+### 导入别人的配色
+
+支持导入：Windows Terminal 的 `schemes`、iTerm2 的 `.itermcolors`、常见的 base16 YAML。导入时只填 `terminal` 部分，`ui` 部分按终端背景色自动生成一套，用户可以再调。
+
+## 2. 字体
+
+```jsonc
+"font": {
+  "family": ["Cascadia Code", "Sarasa Mono SC", "Symbols Nerd Font Mono"],
+  "size": 14,
+  "lineHeight": 1.25,
+  "letterSpacing": 0,
+  "weight": "normal",
+  "weightBold": "bold",
+  "ligatures": true,
+  "uiFamily": ["Segoe UI Variable Text", "Microsoft YaHei UI"]
+}
+```
+
+- `family` 是一个**回退链**：英文用第一个，没有的字（比如中文）用第二个，图标符号用第三个。
+- 默认链：`Cascadia Code`（Windows 11 自带）→ `Microsoft YaHei UI`（系统自带中文）→ 内置的 Nerd Font 符号字体。推荐用户装 `Maple Mono NF CN` 或 `Sarasa Mono SC`，中英文等宽对齐更好。
+- 设置界面里的字体选择器只列等宽字体，每项用该字体显示一段中英混排预览。
+- `Ctrl+=` / `Ctrl+-` / `Ctrl+0` 临时调整字号，只影响当前标签页。
+- 连字：WebGL 渲染器下的支持情况 M3 验证 **【待核实】**；不支持时设置界面里灰掉并说明原因。
+
+## 3. 背景
+
+背景是 mooncli 外观的重点，分四层从下往上叠：
+
+```
+④ 终端文字
+③ 蒙版层：和底色同色的半透明层，保证文字清楚（可调 0–100%）
+② 背景图层：图片 / 渐变 / 纯色，可模糊、可调亮度
+① 窗口材质：Mica / 亚克力 / 不透明
+```
+
+```jsonc
+"background": {
+  "image": "%APPDATA%/mooncli/backgrounds/morning-lake.jpg",
+  "fit": "cover",              // cover | contain | tile | center
+  "position": "bottom right",  // 九宫格位置
+  "opacity": 0.35,             // 图片本身的不透明度
+  "blur": 8,                   // 模糊半径，px
+  "brightness": 1.05,
+  "saturation": 0.9,
+  "overlay": 0.6,              // 蒙版层不透明度；0 = 不加蒙版
+  "scope": "terminal",         // terminal（只铺终端区）| window（铺满整个窗口，面板半透明）
+  "slideshow": { "folder": null, "interval": "30m", "shuffle": true }
+}
+```
+
+- **按配置档设置**：比如"服务器"配置档用一张偏冷的图，一眼就知道这是连远程的标签页。
+- **自动取色**：选好背景图后，可以一键"从图片生成主题"——取图片的主色，生成 `accent` 和三层 `surface`，再自动过一遍对比度检查。
+- **内置几张浅色背景**：晨雾、纸纹、浅水波、月面（淡灰）。都是低对比、大面积留白的图，保证文字区域干净。素材需要自己制作或选用可商用授权的图。
+- 性能：背景图解码一次后缓存成 GPU 纹理；模糊在加载时算好，不在每帧算。轮播切换时做 600ms 淡入淡出。
+
+## 4. 窗口
+
+```jsonc
+"window": {
+  "material": "mica",          // mica | mica-alt | acrylic | none
+  "opacity": 1.0,              // material 为 none 时生效
+  "titleBar": "integrated",    // integrated（标签融进标题栏）| system
+  "cornerStyle": "round",      // round | small | square（Windows 11）
+  "padding": [12, 16],         // 终端文字离窗口边缘的距离：上下、左右
+  "startupSize": [120, 32],    // 列 × 行
+  "rememberPosition": true
+}
+```
+
+- Mica / 亚克力用 Tauri 2 的窗口特效接口（底层是 `window-vibrancy`）。Windows 10 不支持 Mica，自动退回亚克力或不透明。
+- 浅色主题 + Mica 时，`surface0` 会自动加一点透明度，让系统壁纸的颜色隐约透出来，同时保证 ≥ 7:1 的文字对比度。
+
+## 5. 配置档（profile）
+
+```jsonc
+"profiles": [
+  { "name": "日常", "icon": "terminal", "default": true },
+  { "name": "服务器", "icon": "server", "theme": "frost",
+    "background": { "image": "…/cold-sea.jpg" },
+    "command": "ssh dev-box" },
+  { "name": "演示", "font": { "size": 18 }, "background": { "image": null } }
+]
+```
+
+每个配置档可以覆盖主题、字体、背景、启动命令、起始目录、环境变量。新建标签页时按 `Ctrl+Shift+数字` 直接选配置档。
+
+## 6. 改了马上生效
+
+- 监听 `settings.json` 和主题文件夹，保存后 200ms 内生效，不用重启。
+- 文件写错了（JSON 语法错、字段不对）：保留上一份正确的配置继续用，右下角弹出提示，点击直接跳到出错的行。
+- 设置界面和文件是同一份数据。在界面上改，会写回文件并保留原来的注释和格式（用 `jsonc-parser` 做局部修改）。
+
+## 7. 主题编辑器
+
+在设置里打开，左边是控件，右边是**实时预览**（一个假的终端，里面固定展示 `git status`、`ls`、报错信息、16 色色板、Claude Code 风格的输出等样例）。
+
+- 每个颜色旁边显示它在背景上的对比度。
+- "随机微调"按钮：保持色相关系，整体偏暖 / 偏冷 / 更柔和。
+- 导出为文件，或者复制成 JSON 分享。
