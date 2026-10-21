@@ -104,42 +104,25 @@ pub struct Theme {
     pub description: String,
     pub terminal: TerminalColors,
     pub ui: UiColors,
-    /// 单独改某个组件的颜色，键名见 [`COMPONENTS`]
+    /// 单独改某个组件的颜色，键名见 [`components_table`]
     #[serde(default)]
     pub overrides: BTreeMap<String, String>,
 }
 
-/// 组件色和它的默认推导规则（docs/03 §1"两层颜色"）。
+/// 组件色和它的默认推导规则（docs/03 §1"两层颜色"），和界面共用 resources/theme-components.json。
 /// 值是 `基础色名` 或 `基础色名/不透明度`。
-pub const COMPONENTS: &[(&str, &str)] = &[
-    ("titlebar.background", "surface1"),
-    ("sidebar.background", "surface1"),
-    ("sidebar.handle.hover", "accent"),
-    ("tab.hover.background", "surface2"),
-    ("tab.active.background", "surface0"),
-    ("tab.active.foreground", "text"),
-    ("tab.inactive.foreground", "textMuted"),
-    ("tab.indicator", "accent"),
-    ("tab.attention", "accent"),
-    ("panel.background", "surface1"),
-    ("panel.item.hover", "surface2"),
-    ("panel.item.selected", "accentSoft"),
-    ("panel.match", "accent"),
-    ("popup.background", "surface0"),
-    ("popup.border", "border"),
-    ("statusbar.background", "surface1"),
-    ("statusbar.foreground", "textMuted"),
-    ("scrollbar.thumb", "text/0.25"),
-    ("scrollbar.mark.failed", "danger"),
-    ("commandMark.success", "textMuted"),
-    ("commandMark.failed", "danger"),
-    ("commandMark.running", "accent"),
-    ("agentWidget.background", "surface1/0.9"),
-    ("agentWidget.bar.track", "surface2"),
-    ("agentWidget.bar.normal", "accent"),
-    ("agentWidget.bar.warn", "warning"),
-    ("agentWidget.bar.danger", "danger"),
-];
+pub fn components_table() -> &'static [(String, String)] {
+    static TABLE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        #[derive(Deserialize)]
+        struct File {
+            components: serde_json::Map<String, Value>,
+        }
+        let f: File = serde_json::from_str(include_str!("../../../resources/theme-components.json"))
+            .expect("theme-components.json 格式不对");
+        f.components.into_iter().map(|(k, v)| (k, v.as_str().expect("规则必须是字符串").to_string())).collect()
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ContrastIssue {
@@ -171,8 +154,8 @@ impl Theme {
     /// 所有组件色的最终取值：`overrides` 优先，否则按推导规则。
     pub fn components(&self) -> Result<BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
-        for (key, rule) in COMPONENTS {
-            let value = match self.overrides.get(*key) {
+        for (key, rule) in components_table() {
+            let value = match self.overrides.get(key) {
                 Some(v) => {
                     Rgba::parse(v)?;
                     v.clone()
@@ -180,7 +163,7 @@ impl Theme {
                 None => {
                     let (name, alpha) = match rule.split_once('/') {
                         Some((n, a)) => (n, a.parse::<f64>().ok()),
-                        None => (*rule, None),
+                        None => (rule.as_str(), None),
                     };
                     let base = self.base_color(name).expect("推导规则只引用基础色");
                     match alpha {
@@ -247,7 +230,8 @@ impl ThemeSet {
 
     /// 内置主题加上 `dir` 里的 `*.json`。用户主题可以 `extends` 内置主题，也可以同名覆盖。
     pub fn load(dir: &Path) -> Self {
-        let mut raw: Vec<(String, String)> = BUILTIN.iter().map(|(n, s)| (format!("{n}.json"), s.to_string())).collect();
+        let mut raw: Vec<(String, String)> =
+            BUILTIN.iter().map(|(n, s)| (format!("{n}.json"), s.to_string())).collect();
         let mut errors = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {
             let mut files: Vec<_> = rd.flatten().map(|e| e.path()).collect();
@@ -271,9 +255,11 @@ impl ThemeSet {
         for (file, src) in sources {
             match jsonc::parse::<Value>(&file, &src) {
                 Ok(v) => {
-                    let name = v.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| {
-                        file.trim_end_matches(".json").to_string()
-                    });
+                    let name = v
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| file.trim_end_matches(".json").to_string());
                     if !order.contains(&name) {
                         order.push(name.clone());
                     }
@@ -369,7 +355,7 @@ mod tests {
     fn components_follow_rules_and_overrides() {
         let mut t = ThemeSet::builtin().get("moon-paper").unwrap().clone();
         let c = t.components().unwrap();
-        assert_eq!(c.len(), COMPONENTS.len());
+        assert_eq!(c.len(), components_table().len());
         assert_eq!(c["tab.indicator"], t.ui.accent);
         assert_eq!(c["scrollbar.thumb"], format!("{}40", t.ui.text));
         t.overrides.insert("tab.indicator".into(), "#FF0000".into());

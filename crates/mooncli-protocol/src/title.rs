@@ -12,13 +12,11 @@ pub fn clean_title(raw: &str) -> CleanTitle {
     let trimmed = raw.trim();
     let mut split = 0;
     for (i, c) in trimmed.char_indices() {
-        if is_activity_char(c) {
-            split = i + c.len_utf8();
-        } else if c.is_whitespace() && split > 0 {
-            split = i + c.len_utf8();
-        } else {
+        // 状态符号之间、之后的空白也算进状态部分
+        if !(is_activity_char(c) || (c.is_whitespace() && split > 0)) {
             break;
         }
+        split = i + c.len_utf8();
     }
     let activity = trimmed[..split].trim();
     CleanTitle {
@@ -43,14 +41,13 @@ pub fn is_uninformative(text: &str) -> bool {
     if t.is_empty() {
         return true;
     }
-    let t = t
-        .strip_prefix("Administrator: ")
-        .or_else(|| t.strip_prefix("管理员: "))
-        .unwrap_or(t);
+    let t = t.strip_prefix("Administrator: ").or_else(|| t.strip_prefix("管理员: ")).unwrap_or(t);
     let lower = t.to_ascii_lowercase().replace('\\', "/");
     let file = lower.rsplit('/').next().unwrap_or(&lower);
-    matches!(file, "pwsh" | "pwsh.exe" | "powershell" | "powershell.exe" | "windows powershell" | "powershell 7" | "cmd.exe")
-        || lower.starts_with("powershell 7")
+    matches!(
+        file,
+        "pwsh" | "pwsh.exe" | "powershell" | "powershell.exe" | "windows powershell" | "powershell 7" | "cmd.exe"
+    ) || lower.starts_with("powershell 7")
 }
 
 #[cfg(test)]

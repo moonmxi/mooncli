@@ -353,7 +353,8 @@ mod tests {
     #[test]
     fn output_events_and_exit_code() {
         let sink = Arc::new(Collect::default());
-        let _s = Session::spawn(sh(r#"printf '\033]133;A;nonce=n\007hello %s' "$MOONCLI_TEST"; exit 3"#), sink.clone()).unwrap();
+        let _s = Session::spawn(sh(r#"printf '\033]133;A;nonce=n\007hello %s' "$MOONCLI_TEST"; exit 3"#), sink.clone())
+            .unwrap();
         assert_eq!(sink.wait_exit(), Some(3));
         assert!(sink.output().contains("hello 1"));
         let items = sink.items.lock().unwrap();

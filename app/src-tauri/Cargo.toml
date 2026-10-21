@@ -1,0 +1,26 @@
+[package]
+name = "mooncli"
+description = "浅色优先、看得懂会话内容的 Windows 终端"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "mooncli_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+mooncli-protocol.workspace = true
+mooncli-history.workspace = true
+mooncli-config.workspace = true
+mooncli-pty.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_LibraryLoader"] }

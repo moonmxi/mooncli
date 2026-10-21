@@ -4,3 +4,5 @@ dist/
 resources/conpty/
 __pycache__/
 *.log
+app/src-tauri/gen/
+.DS_Store

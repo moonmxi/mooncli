@@ -26,7 +26,8 @@ pub fn find_shell(configured: Option<&str>) -> Option<ShellSpec> {
         return Some(ShellSpec { program: p, kind });
     }
     let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
-    let path_dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let path_dirs: Vec<PathBuf> =
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     find_with(&path_dirs, env("ProgramFiles"), env("LOCALAPPDATA"), env("SHELL"), env("SystemRoot"))
 }
 

@@ -200,9 +200,8 @@ impl Store {
             return Ok(());
         }
         let mut ix = Index::default();
-        let mut stmt = self.conn.prepare(
-            "SELECT id, text, cwd, exit_code, started_at, host FROM commands ORDER BY id",
-        )?;
+        let mut stmt =
+            self.conn.prepare("SELECT id, text, cwd, exit_code, started_at, host FROM commands ORDER BY id")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let mut rec = CommandRecord::new(r.get::<_, String>(1)?, r.get(4)?);
@@ -232,7 +231,9 @@ mod tests {
         s.finish(id, Some(0), 120).unwrap();
         let (code, dur): (i32, i64) = s
             .conn
-            .query_row("SELECT exit_code, duration_ms FROM commands WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT exit_code, duration_ms FROM commands WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!((code, dur), (0, 120));
         assert_eq!(s.count().unwrap(), 1);

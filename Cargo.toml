@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "app/src-tauri"]
 # 本地只想跑库测试时，不用编译 Tauri 主程序
 default-members = ["crates/*"]
 

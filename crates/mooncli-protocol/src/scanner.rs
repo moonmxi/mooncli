@@ -17,17 +17,39 @@ const MAX_CSI_PARAMS: usize = 64;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ShellEvent {
     /// OSC 133 A/B/C/D。`trusted` 表示带了本会话的 nonce，来自本机 pwsh 集成脚本。
-    Mark { kind: MarkKind, trusted: bool },
-    CommandEnd { exit_code: Option<i32>, trusted: bool },
-    Cwd { host: Option<String>, path: String },
-    Title { text: String },
+    Mark {
+        kind: MarkKind,
+        trusted: bool,
+    },
+    CommandEnd {
+        exit_code: Option<i32>,
+        trusted: bool,
+    },
+    Cwd {
+        host: Option<String>,
+        path: String,
+    },
+    Title {
+        text: String,
+    },
     Bell,
-    Notify { title: Option<String>, body: String },
+    Notify {
+        title: Option<String>,
+        body: String,
+    },
     /// OSC 9;4 进度（Windows Terminal 支持的写法）。state: 0 清除 1 正常 2 出错 3 不确定 4 暂停
-    Progress { state: u8, value: u8 },
-    AltScreen { on: bool },
+    Progress {
+        state: u8,
+        value: u8,
+    },
+    AltScreen {
+        on: bool,
+    },
     /// 带对 nonce 的私有序列，`data` 是解码后的 JSON。
-    Private { kind: String, data: serde_json::Value },
+    Private {
+        kind: String,
+        data: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -196,9 +218,7 @@ impl Scanner {
         }
         let Some(params) = self.csi.strip_prefix(b"?") else { return };
         let on = fin == b'h';
-        let alt = params
-            .split(|&c| c == b';')
-            .any(|p| matches!(p, b"1049" | b"1047" | b"47"));
+        let alt = params.split(|&c| c == b';').any(|p| matches!(p, b"1049" | b"1047" | b"47"));
         if alt {
             out.emit(ShellEvent::AltScreen { on });
         }
@@ -301,9 +321,9 @@ impl Scanner {
 /// 解析 `file://host/path`。Windows 路径会写成 `file://host/C:/Users/...`。
 fn parse_file_url(s: &str) -> Option<ShellEvent> {
     let rest = s.strip_prefix("file://")?;
-    let (host, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => return None,
+    let (host, path) = {
+        let i = rest.find('/')?;
+        (&rest[..i], &rest[i..])
     };
     let mut path = percent_decode(path);
     // "/C:/x" -> "C:/x"
@@ -320,12 +340,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
         }
         out.push(b[i]);
         i += 1;

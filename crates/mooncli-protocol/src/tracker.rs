@@ -22,10 +22,17 @@ pub enum ShellState {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TrackerUpdate {
-    State { state: ShellState },
+    State {
+        state: ShellState,
+    },
     /// 本机命令开始。`text` 来自私有序列 `cmd`，可能拿不到。
-    CommandStarted { text: Option<String> },
-    CommandFinished { text: Option<String>, exit_code: Option<i32> },
+    CommandStarted {
+        text: Option<String>,
+    },
+    CommandFinished {
+        text: Option<String>,
+        exit_code: Option<i32>,
+    },
     /// 远程 shell（不带 nonce）的提示符，说明用户此刻在远程的命令行上。
     RemotePrompt,
 }
@@ -132,7 +139,8 @@ mod tests {
         );
         assert!(!t.terminal_may_handle_completion_keys());
 
-        let ups = run(&mut t, &mut s, b"output\r\n\x1b]133;D;0;nonce=n\x07\x1b]133;A;nonce=n\x07\x1b]133;B;nonce=n\x07");
+        let ups =
+            run(&mut t, &mut s, b"output\r\n\x1b]133;D;0;nonce=n\x07\x1b]133;A;nonce=n\x07\x1b]133;B;nonce=n\x07");
         assert_eq!(
             ups,
             vec![

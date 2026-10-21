@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 核心库测试。Ubuntu 镜像自带 pwsh，集成脚本的端到端测试会真的跑起来。
+  rust:
+    name: Rust 测试（Linux）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: pwsh -NoLogo -Command '$PSVersionTable.PSVersion.ToString()'
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      # 性能指标：10 万条历史逐字搜索 < 16ms（docs/09 §3），只在发布构建下检查
+      - run: cargo test --release -p mooncli-history hundred_thousand -- --nocapture
+
+  frontend:
+    name: 界面测试与主题检查
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: python3 ../tools/check_contrast.py
+
+  # 真正的目标平台：编译、跑测试（ConPTY 下的 pwsh 集成测试）、打安装包
+  windows:
+    name: Windows 构建与安装包
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+      - run: cargo test
+      - name: 打包（NSIS 安装包）
+        run: pnpm tauri build --bundles nsis
+        working-directory: app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mooncli-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error

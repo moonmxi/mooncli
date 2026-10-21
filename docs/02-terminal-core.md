@@ -10,16 +10,16 @@ ConPTY 是 Windows 提供的"伪终端"：我们创建一个，它会给 pwsh �
 
 系统自带的 ConPTY 跟着 Windows 版本走，老系统上有不少已修复的 bug（重绘错乱、改尺寸丢内容等）。Windows Terminal 和 WezTerm 的做法是**随程序附带新版 `conpty.dll` 和 `OpenConsole.exe`**，我们照做：
 
-- 构建时从微软官方的 `Microsoft.Windows.Console.ConPTY` NuGet 包取这两个文件，放在 `mooncli.exe` 旁边。
-- 启动时优先加载自带的 `conpty.dll`，失败就退回系统 `kernel32` 里的 `CreatePseudoConsole`。
-- 设置里留一个开关"使用系统 ConPTY"，方便排查问题。
+- 构建时从微软官方的 `Microsoft.Windows.Console.ConPTY` NuGet 包取这两个文件，放在资源目录的 `conpty/` 子目录里。
+- 我们用的 `portable-pty`（WezTerm 的伪终端库）第一次创建伪终端时，会按系统的 DLL 搜索顺序找 `conpty.dll`，找不到就用系统 `kernel32` 里的版本。所以启动时用 `SetDllDirectoryW` 把 `conpty/` 加进搜索路径即可（`app/src-tauri/src/conpty.rs`）。
+- 设置里留一个开关"使用附带的 ConPTY"，关掉时不加这个目录，就会退回系统版本，方便排查问题。
 
 ### 创建参数
 
 | 项 | 做法 |
 | --- | --- |
 | 尺寸 | 用 xterm.js 算出的行列数创建；窗口改尺寸时防抖 50ms 再调 `ResizePseudoConsole` |
-| 标志位 | 先只开 `PSEUDOCONSOLE_RESIZE_QUIRK`（避免改尺寸时重复绘制）。`WIN32_INPUT_MODE` 见下文 |
+| 标志位 | `portable-pty` 固定打开 `PSEUDOCONSOLE_RESIZE_QUIRK`（避免改尺寸时重复绘制）和 `PSEUDOCONSOLE_WIN32_INPUT_MODE`，见下文 |
 | 环境变量 | 继承用户环境，另加 `TERM_PROGRAM=mooncli`、`TERM_PROGRAM_VERSION`、`MOONCLI_SESSION_ID`、`COLORTERM=truecolor` |
 | 工作目录 | 新标签页默认用"当前标签页所在目录"，可在设置里改成固定目录或用户主目录 |
 
@@ -27,8 +27,14 @@ ConPTY 是 Windows 提供的"伪终端"：我们创建一个，它会给 pwsh �
 
 VT 序列表达不了所有按键组合，比如 `Ctrl+Shift+Enter`、`Ctrl+Space` 在某些情况下到了 pwsh 就分辨不出来。Windows Terminal 用一种"win32 输入模式"把完整按键信息传给 ConPTY，PSReadLine 就能收到准确的按键。
 
-- **M1**：先用 xterm.js 标准的 VT 编码，保证兼容。
-- **M2**：做一个实验开关，自己编码 win32 输入模式，验证 PSReadLine 和 ssh、vim 都正常后再决定是否默认打开。**【待核实】**
+`portable-pty` 创建 ConPTY 时已经带了 `WIN32_INPUT_MODE` 标志，效果是 ConPTY 启动后会向终端发 `CSI ? 9001 h`，**请求**终端改用这种编码；终端不回应，就继续用普通 VT 输入。xterm.js 不认识这个请求，所以现在用的是普通 VT 输入，一切正常。
+
+- **M1（现状）**：xterm.js 标准的 VT 编码。
+- **M2**：做一个实验开关，收到 `?9001h` 时改用 win32 输入模式编码按键，验证 PSReadLine 和 ssh、vim 都正常后再决定是否默认打开。**【待核实】**
+
+### 光标位置查询
+
+pwsh（.NET 控制台）和 PSReadLine 会发 `ESC [ 6 n` 问终端"光标在哪"，并**等待回答**。没人回答时 .NET 的控制台读取会出错，读到的命令变成乱码（集成测试里实际遇到过）。xterm.js 会自动回答，所以界面里没问题；但任何不经过 xterm.js、直接驱动伪终端的代码（测试、以后的无界面模式）都必须自己回答。
 
 ## 2. 输出管道
 
@@ -90,9 +96,15 @@ ESC ] 6973 ; <nonce> ; <类型> ; <base64 编码的 JSON> BEL
 | `completions` | 补全请求的结果（见 [04](04-command-memory.md)） |
 | `buffer` | 当前输入行内容和光标位置（只在常驻补全面板打开时发） |
 
-**nonce 是干什么的**：mooncli 启动每个会话时生成一个随机串，通过环境变量交给集成脚本。只有带对 nonce 的私有序列才会被当真。这样 ssh 到远程服务器后，远程程序就算打印出长得一样的序列，也骗不了 mooncli（VS Code 也是这么防的）。
+**nonce 是干什么的**：mooncli 启动每个会话时生成一个随机串，通过环境变量 `MOONCLI_NONCE` 交给集成脚本。只有带对 nonce 的私有序列才会被当真。这样 ssh 到远程服务器后，远程程序就算打印出长得一样的序列，也骗不了 mooncli（VS Code 也是这么防的）。
 
-### 集成脚本要点（草稿）
+nonce 还用在标准的 133 标记上：本机集成脚本发的是 `OSC 133 ; A ; nonce=<随机串>`（133 标记允许带 `键=值` 选项，其它终端会忽略不认识的选项）。mooncli 只有收到带对 nonce 的标记，才会认为"本机 pwsh 在等待输入"并开始处理补全类按键；远程 shell 发的 133 标记不带 nonce，只用来记录远程信息（见 [05](05-interaction.md) §1）。
+
+集成脚本加载后会立刻从环境变量里删掉 `MOONCLI_NONCE`，所以从这个 pwsh 启动的子进程（ssh、claude、嵌套的 pwsh）都拿不到它。
+
+### 集成脚本
+
+正式版在 [`shell/pwsh/MoonCli.ps1`](../shell/pwsh/MoonCli.ps1)，由 `crates/mooncli-pty/tests/pwsh_integration.rs` 在真实 pwsh 里逐项测试（提示符标记、命令文本、四种退出码情况、空回车、切换目录、多行命令、补全请求）。下面是最初的设计草稿，保留作说明：
 
 ```powershell
 # MoonCli.ps1 —— 草稿，示意关键结构
@@ -137,11 +149,13 @@ function global:PSConsoleHostReadLine {
 }
 ```
 
-实现时要处理的细节：
+实现时处理的细节：
 
 - 用户的 prompt 可能是 oh-my-posh 生成的，返回值里本身就带颜色序列，直接拼接即可。
-- PSReadLine 没加载（比如用户禁用了）时，`PSConsoleHostReadLine` 不存在，要降级为只发 133 A/B/D。
-- 退出码判断的写法要对 cmdlet 失败、原生程序非 0 退出、`Ctrl+C` 中断三种情况分别测试。**【待核实】**
+- PSReadLine 没加载时，先尝试 `Import-Module PSReadLine`；还是没有 `PSConsoleHostReadLine` 就降级为只发 133 A/B/D。
+- 退出码：cmdlet 失败时 `$LASTEXITCODE` 可能还是上一次原生程序留下的值，直接用会误报。正式版在命令开始时记下 `$LASTEXITCODE`，结束时只有它变了才采用，否则报 1。已在测试里覆盖。
+- 空回车不发"命令开始/结束"标记，不算一条命令。
+- `Ctrl+C` 中断时的退出码还没有专门测试。**【待核实】**
 
 ## 5. 渲染
 

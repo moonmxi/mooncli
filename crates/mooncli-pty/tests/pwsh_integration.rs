@@ -63,7 +63,12 @@ impl Rec {
     }
 
     fn prompt_count(&self) -> usize {
-        self.updates.lock().unwrap().iter().filter(|u| **u == TrackerUpdate::State { state: ShellState::Prompt }).count()
+        self.updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|u| **u == TrackerUpdate::State { state: ShellState::Prompt })
+            .count()
     }
 
     fn finished(&self) -> Vec<(Option<String>, Option<i32>)> {
@@ -113,11 +118,13 @@ fn pwsh_integration_script_end_to_end() {
 
     // 成功的命令
     s.write(b"Write-Output 'hi there'\r").unwrap();
-    rec.wait("第 1 条命令结束", |r| r.finished().len() >= 1);
+    rec.wait("第 1 条命令结束", |r| !r.finished().is_empty());
     assert_eq!(rec.finished()[0], (Some("Write-Output 'hi there'".into()), Some(0)));
 
     // 原生程序非 0 退出
-    s.write(b"sh -c 'exit 3'\r").unwrap();
+    // 用 pwsh 自己产生非 0 退出码，Windows 和 Linux 都能跑
+    let native = format!("& '{}' -NoProfile -NonInteractive -Command 'exit 3'\r", shell.program.display());
+    s.write(native.as_bytes()).unwrap();
     rec.wait("第 2 条命令结束", |r| r.finished().len() >= 2);
     assert_eq!(rec.finished()[1].1, Some(3));
 
@@ -146,9 +153,14 @@ fn pwsh_integration_script_end_to_end() {
     assert_eq!(rec.finished().len(), 4);
 
     // 切换目录
-    s.write(b"Set-Location /\r").unwrap();
-    rec.wait("目录变成 /", |r| {
-        r.events.lock().unwrap().iter().any(|e| matches!(e, ShellEvent::Cwd { host: Some(_), path } if path == "/"))
+    let target = std::env::temp_dir().join("mooncli-it-dir");
+    std::fs::create_dir_all(&target).unwrap();
+    s.write(format!("Set-Location '{}'\r", target.display()).as_bytes()).unwrap();
+    rec.wait("目录变成临时目录", |r| {
+        r.events.lock().unwrap().iter().any(|e| {
+            matches!(e, ShellEvent::Cwd { host: Some(_), path }
+                if path.replace('\\', "/").to_lowercase().trim_end_matches('/').ends_with("mooncli-it-dir"))
+        })
     });
 
     // 多行命令完整拿到
@@ -179,7 +191,8 @@ fn pwsh_integration_script_end_to_end() {
     assert_eq!(data["line"], "Get-ChildI");
     assert_eq!(data["start"], 0);
     assert_eq!(data["len"], 10);
-    let items: Vec<String> = data["items"].as_array().unwrap().iter().map(|i| i["t"].as_str().unwrap().to_string()).collect();
+    let items: Vec<String> =
+        data["items"].as_array().unwrap().iter().map(|i| i["t"].as_str().unwrap().to_string()).collect();
     assert!(items.contains(&"Get-ChildItem".to_string()), "{items:?}");
     // 补全请求不应该改动输入行，也不应该算作执行了命令
     assert_eq!(rec.finished().len(), 6);

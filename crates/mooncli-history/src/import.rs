@@ -38,10 +38,7 @@ mod tests {
     #[test]
     fn single_and_multiline() {
         let content = "git status\r\nforeach ($i in 1..3) {`\r\n  $i`\r\n}\r\n\r\nls\r\n";
-        assert_eq!(
-            parse_psreadline_history(content),
-            vec!["git status", "foreach ($i in 1..3) {\n  $i\n}", "ls"]
-        );
+        assert_eq!(parse_psreadline_history(content), vec!["git status", "foreach ($i in 1..3) {\n  $i\n}", "ls"]);
     }
 
     #[test]

@@ -17,13 +17,26 @@
 
 M3 和 M2 之间没有依赖，有两个人时可以并行。
 
+## 当前进度
+
+更新于 2026-10-21。
+
+| 里程碑 | 状态 | 说明 |
+| --- | --- | --- |
+| M0 骨架 | ✅ 完成 | Cargo workspace、Tauri 2 + React + Vite、CI（Linux 测试 + Windows 打包） |
+| M1 能用的终端 | 🟡 大部分完成 | ConPTY 会话、攒批和背压、多标签、侧栏缩放和响应式、智能复制粘贴、多行粘贴确认已完成；附带新版 ConPTY 的下载、窗口位置记忆、输出搜索框还没做 |
+| M2 shell 集成 | 🟡 大部分完成 | 集成脚本、带 nonce 的标记、状态机、历史入库和导入已完成并在真实 pwsh 里测试；命令块装饰（左侧圆点、滚动条标记、Ctrl+↑↓）还没做 |
+| M3 及以后 | ⬜ 未开始 | 五套主题和组件色推导已经先做了，可以在侧栏底部切换 |
+
+已经验证过的（在 Linux 上用 pwsh 7.6 跑真实应用和测试）：shell 集成全流程、历史记录带目录/退出码/耗时、TAB 在嵌套 shell 里原样透传、侧栏拖动/吸附/双击/四档、四段响应式布局。**还没有在 Windows 真机上跑过**：CI 会在 Windows 上编译、跑测试、打安装包，ConPTY 下的实际表现要靠安装包试用确认。
+
 ## 2. 各里程碑任务
 
 ### M0 骨架
 
-- [ ] Cargo workspace + Tauri 2 + React + Vite + TypeScript 工程
-- [ ] 代码规范：rustfmt、clippy、eslint、prettier
-- [ ] GitHub Actions：Windows 上构建、跑测试、跑 `tools/check_contrast.py`
+- [x] Cargo workspace + Tauri 2 + React + Vite + TypeScript 工程
+- [x] 代码规范：rustfmt、clippy（eslint、prettier 还没加）
+- [x] GitHub Actions：Windows 上构建、跑测试、跑 `tools/check_contrast.py`
 - [ ] 构建脚本：从 NuGet 下载 ConPTY 包，放到 `resources/conpty/`
 - [ ] JSON Schema：`schema/settings.schema.json`、`schema/theme.schema.json` 初版
 
@@ -31,12 +44,12 @@ M3 和 M2 之间没有依赖，有两个人时可以并行。
 
 ### M1 能用的终端
 
-- [ ] `mooncli-pty`：ConPTY 创建/读写/改尺寸/关闭；优先加载自带 conpty.dll
-- [ ] 输出批处理（4ms / 64KB）+ 背压
-- [ ] xterm.js 接入：WebGL、fit、unicode11、web-links、search
+- [x] `mooncli-pty`：ConPTY 创建/读写/改尺寸/关闭；优先加载自带 conpty.dll（加载逻辑已写，构建时下载 NuGet 包还没做）
+- [x] 输出批处理（4ms / 64KB）+ 背压
+- [x] xterm.js 接入：WebGL、fit、unicode11、web-links、search
 - [ ] 查找 pwsh 并启动；找不到时的引导页
-- [ ] 多标签页（先做顶部横排，最简单）
-- [ ] 复制粘贴基础：Ctrl+C 智能复制、Ctrl+V、括号粘贴、多行确认
+- [x] 多标签页（左侧竖排和顶部横排都做了）
+- [x] 复制粘贴基础：Ctrl+C 智能复制、Ctrl+V、括号粘贴、多行确认
 - [ ] 窗口：自定义标题栏、记住位置大小
 
 **验收**：
@@ -48,10 +61,10 @@ M3 和 M2 之间没有依赖，有两个人时可以并行。
 
 ### M2 shell 集成
 
-- [ ] `MoonCli.ps1`：包 prompt、包 PSConsoleHostReadLine、发 133/7/9;9 和私有序列
-- [ ] 带 nonce 的私有序列解析（Rust 端）
-- [ ] 会话状态机（提示符上 / 运行中 / 全屏程序）
-- [ ] 历史库：建表、实时写入、导入 PSReadLine 历史、敏感命令过滤
+- [x] `MoonCli.ps1`：包 prompt、包 PSConsoleHostReadLine、发 133/7/9;9 和私有序列
+- [x] 带 nonce 的私有序列解析（Rust 端）
+- [x] 会话状态机（提示符上 / 运行中 / 全屏程序）
+- [x] 历史库：建表、实时写入、导入 PSReadLine 历史、敏感命令过滤
 - [ ] 命令块：左侧小圆点、滚动条标记、Ctrl+↑↓ 跳转、选中整块输出
 - [ ] 实验：win32 输入模式（开关，默认关）
 
@@ -64,21 +77,22 @@ M3 和 M2 之间没有依赖，有两个人时可以并行。
 ### M3 外观系统
 
 - [ ] 主题加载：继承、组件色推导、CSS 变量注入、xterm 主题同步
-- [ ] 五套内置主题；导入 Windows Terminal / iTerm2 / base16 配色
+- [x] 五套内置主题（导入 Windows Terminal / iTerm2 / base16 配色还没做）
 - [ ] 字体：回退链、字体选择器（只列等宽）、字号快捷键、连字验证
 - [ ] 背景：四层结构、图片参数、按配置档设置、轮播、从图片生成主题
+- [ ] 浅色主题下调整 pwsh 自己的配色：PowerShell 7 默认用蓝底白字显示目录名（`$PSStyle.FileInfo.Directory`），在浅色背景上很扎眼。集成脚本根据当前主题设置一套适合浅色的 `$PSStyle`，用户可关闭
 - [ ] 窗口材质：Mica / 亚克力 / 不透明，Windows 10 降级
 - [ ] 配置热更新 + 出错提示
 - [ ] 设置界面（基础版）+ 主题编辑器（带实时预览和对比度显示）
-- [ ] 左侧竖排标签栏（展开 / 收起）
+- [x] 左侧竖排标签栏（展开 / 收起）
 
 **验收**：五套主题逐一检查原型里的所有区域；背景图 + Mica 下滚动仍 60fps；改配置文件 200ms 内生效。
 
 ### M4 命令记忆
 
-- [ ] 历史库查询：模糊匹配（nucleo）+ 排序公式
+- [x] 历史库查询：模糊匹配（nucleo）+ 排序公式
 - [ ] 历史面板：去重、范围筛选、预览、填入/执行、删除
-- [ ] pwsh 补全桥（悄悄发组合键 → TabExpansion2 → 私有序列）
+- [x] pwsh 补全桥（悄悄发组合键 → TabExpansion2 → 私有序列）：pwsh 和 Rust 两端完成，界面面板未做
 - [ ] 命令说明书：从 Fig specs 转换 100 个常用命令，补中文说明
 - [ ] 路径补全
 - [ ] 补全面板：多来源合并、不跳动的增量排序、替换规则

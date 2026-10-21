@@ -1,0 +1,32 @@
+{
+  "$comment": "组件色的默认推导规则（docs/03 §1）。值是基础色名，或“基础色名/不透明度”。Rust 和界面共用这一份。",
+  "components": {
+    "titlebar.background": "surface1",
+    "sidebar.background": "surface1",
+    "sidebar.handle.hover": "accent",
+    "tab.hover.background": "surface2",
+    "tab.active.background": "surface0",
+    "tab.active.foreground": "text",
+    "tab.inactive.foreground": "textMuted",
+    "tab.indicator": "accent",
+    "tab.attention": "accent",
+    "panel.background": "surface1",
+    "panel.item.hover": "surface2",
+    "panel.item.selected": "accentSoft",
+    "panel.match": "accent",
+    "popup.background": "surface0",
+    "popup.border": "border",
+    "statusbar.background": "surface1",
+    "statusbar.foreground": "textMuted",
+    "scrollbar.thumb": "text/0.25",
+    "scrollbar.mark.failed": "danger",
+    "commandMark.success": "textMuted",
+    "commandMark.failed": "danger",
+    "commandMark.running": "accent",
+    "agentWidget.background": "surface1/0.9",
+    "agentWidget.bar.track": "surface2",
+    "agentWidget.bar.normal": "accent",
+    "agentWidget.bar.warn": "warning",
+    "agentWidget.bar.danger": "danger"
+  }
+}

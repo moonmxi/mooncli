@@ -4,7 +4,7 @@
 
 它想解决的事情很简单：**好看（尤其是浅色）、记得住命令、用着顺手、看得懂每个标签页里在干什么**。
 
-> 当前状态：设计阶段。代码还没开始写，先把设计和计划定下来。
+> 当前状态：M0 骨架完成，M1（能用的终端）和 M2（shell 集成）大部分完成。进度见 [docs/09](docs/09-roadmap.md#当前进度)。还没有在 Windows 真机上验证过，CI 会打出安装包供试用。
 
 ## 主要特点（计划中）
 
@@ -30,6 +30,32 @@
 | [07 Agent 用量小窗](docs/07-agent-monitor.md) | 数据来源、合规边界、小窗设计 |
 | [08 美术风格与版面](docs/08-art-direction.md) | 配色、字体、间距、各区域版面规格 |
 | [09 实现计划](docs/09-roadmap.md) | 里程碑、任务拆分、验收标准、风险 |
+
+## 开发
+
+需要：Rust（stable）、Node.js 22 + pnpm 10、PowerShell 7。
+
+```powershell
+cd app
+pnpm install
+pnpm tauri dev      # 启动真正的应用
+pnpm dev            # 只在浏览器里打开界面（用模拟 shell，方便调界面），http://localhost:1420
+pnpm test           # 界面逻辑测试
+cd ..
+cargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑集成脚本的端到端测试
+```
+
+| 目录 | 内容 |
+| --- | --- |
+| `crates/mooncli-protocol` | 识别输出里的 shell 集成标记、会话状态机（按键归属）、标题清理 |
+| `crates/mooncli-history` | 命令历史库：过滤、导入、模糊搜索和排序 |
+| `crates/mooncli-config` | 设置和主题：带注释 JSON、主题继承、组件色、对比度检查 |
+| `crates/mooncli-pty` | 伪终端会话（Windows 上是 ConPTY）、查找和启动 pwsh |
+| `app/src-tauri` | Tauri 主程序：把上面几块接起来，提供给界面调用 |
+| `app/src` | 界面：标签栏、终端、状态栏、布局规则 |
+| `shell/pwsh/MoonCli.ps1` | pwsh 集成脚本 |
+
+每次推送，GitHub Actions 会在 Windows 上编译并打出安装包，在 Actions 页面的 `mooncli-windows-installer` 里下载。
 
 ## 设计资源
 
