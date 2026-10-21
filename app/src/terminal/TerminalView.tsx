@@ -2,26 +2,44 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { base64ToBytes } from "../backend/base64";
 import type { Backend } from "../backend/types";
-import { useStore } from "../state/store";
-import { xtermTheme, type Theme } from "../theme/theme";
 import { isAppShortcut } from "../shortcuts";
-
-export const TERMINAL_FONT = '"Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", "Microsoft YaHei UI", Consolas, monospace';
-export const TERMINAL_FONT_SIZE = 14;
+import { clamp, effectiveFontSize, LIMITS, useSettings, type AppSettings } from "../state/settings";
+import { useStore } from "../state/store";
+import { useUi } from "../state/ui";
+import { xtermTheme, type Theme } from "../theme/theme";
 
 const terminals = new Map<string, { term: Terminal; fit: FitAddon; search: SearchAddon }>();
 export const getTerminal = (id: string) => terminals.get(id);
 
 /** 去掉每行末尾的空格（终端用空格填满整行，复制出来很难看） */
-export function cleanCopy(text: string): string {
-  return text.replace(/[ \t]+$/gm, "");
+export function cleanCopy(text: string, trim = true): string {
+  return trim ? text.replace(/[ \t]+$/gm, "") : text;
+}
+
+/** 终端选项：都来自设置。背景图打开时终端底色变透明（只把透明度设为 0，颜色保留给对比度计算用）。 */
+export function terminalOptions(s: AppSettings, theme: Theme, transparent: boolean): ITerminalOptions {
+  const t = xtermTheme(theme);
+  return {
+    fontFamily: s.font.family,
+    fontSize: effectiveFontSize(s),
+    lineHeight: s.font.lineHeight,
+    fontWeight: s.font.weight as ITerminalOptions["fontWeight"],
+    fontWeightBold: s.font.weightBold as ITerminalOptions["fontWeightBold"],
+    cursorStyle: s.terminal.cursorStyle,
+    cursorBlink: s.terminal.cursorBlink,
+    scrollback: s.terminal.scrollback,
+    minimumContrastRatio: s.terminal.minimumContrastRatio,
+    smoothScrollDuration: s.terminal.smoothScrollMs,
+    theme: transparent ? { ...t, background: `${theme.terminal.background.slice(0, 7)}00` } : t,
+  };
 }
 
 interface Props {
@@ -29,40 +47,45 @@ interface Props {
   active: boolean;
   theme: Theme;
   backend: Backend;
+  transparent: boolean;
 }
 
-export function TerminalView({ id, active, theme, backend }: Props) {
+export function TerminalView({ id, active, theme, backend, transparent }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const settings = useSettings((s) => s.settings);
   const [paste, setPaste] = useState<string | null>(null);
-  const pasteRef = useRef<string | null>(null);
-  pasteRef.current = paste;
+  const live = useRef({ settings, paste });
+  live.current = { settings, paste };
 
   useEffect(() => {
     const el = host.current!;
+    const s0 = live.current.settings;
     const term = new Terminal({
-      fontFamily: TERMINAL_FONT,
-      fontSize: TERMINAL_FONT_SIZE,
-      lineHeight: 1.2,
-      cursorStyle: "bar",
-      cursorBlink: true,
-      cursorInactiveStyle: "outline",
-      scrollback: 10_000,
-      minimumContrastRatio: 4.5,
-      smoothScrollDuration: 120,
+      ...terminalOptions(s0, theme, transparent),
+      allowTransparency: true,
       allowProposedApi: true,
+      cursorInactiveStyle: "outline",
       drawBoldTextInBrightColors: false,
       rightClickSelectsWord: false,
-      theme: xtermTheme(theme),
+      // 字形比格子宽时（有些字体里的箭头、符号）缩小到格子里，不压到旁边的字
+      rescaleOverlappingGlyphs: true,
+      // 方框线、块元素、Powerline 箭头由终端自己画，不依赖字体，对得严丝合缝
+      customGlyphs: true,
       windowsPty: navigator.userAgent.includes("Windows") ? { backend: "conpty" } : undefined,
     });
     const fit = new FitAddon();
     const search = new SearchAddon();
     term.loadAddon(fit);
     term.loadAddon(search);
-    term.loadAddon(new Unicode11Addon());
     term.loadAddon(new WebLinksAddon());
-    term.unicode.activeVersion = "11";
     term.open(el);
+    // 字符宽度：优先用完整的 Unicode 15 字素簇规则（组合 emoji、国旗、肤色修饰都算一个宽字符），不行就退回 Unicode 11
+    try {
+      term.loadAddon(new UnicodeGraphemesAddon());
+    } catch {
+      term.loadAddon(new Unicode11Addon());
+      term.unicode.activeVersion = "11";
+    }
     try {
       const gl = new WebglAddon();
       // 显卡驱动重置、远程桌面切换时 WebGL 会丢失，退回默认渲染器
@@ -76,7 +99,7 @@ export function TerminalView({ id, active, theme, backend }: Props) {
 
     const apply = useStore.getState().apply;
     backend
-      .create({ id, cols: term.cols, rows: term.rows }, (msg) => {
+      .create({ id, cols: term.cols, rows: term.rows, cwd: useStore.getState().tabs.find((t) => t.id === id)?.initialCwd }, (msg) => {
         if (msg.type === "output") {
           term.write(base64ToBytes(msg.data), () => backend.ack(id, msg.bytes));
           return;
@@ -109,75 +132,151 @@ export function TerminalView({ id, active, theme, backend }: Props) {
     });
     ro.observe(el);
 
-    const copySelection = () => {
-      const text = cleanCopy(term.getSelection());
-      if (text) navigator.clipboard.writeText(text).catch(() => {});
-      term.clearSelection();
+    // ---- 复制 ----
+    // 最近一次在终端里松开鼠标的位置：鼠标选完再按 Ctrl+C，提醒卡片出现在松手的地方
+    let lastPointer: { x: number; y: number; at: number } | null = null;
+    const onMouseUp = (e: MouseEvent) => {
+      lastPointer = { x: e.clientX, y: e.clientY, at: Date.now() };
+      if (live.current.settings.terminal.copyOnSelect && term.hasSelection()) copySelection(e.clientX, e.clientY);
     };
+    el.addEventListener("mouseup", onMouseUp);
+
+    /** 没有鼠标位置时，用选区末尾所在的格子算位置 */
+    const selectionEndPoint = () => {
+      const screen = el.querySelector(".xterm-screen")?.getBoundingClientRect();
+      const sel = term.getSelectionPosition();
+      if (!screen) return { x: innerWidth / 2, y: innerHeight / 3 };
+      if (!sel) return { x: screen.left + screen.width / 2, y: screen.top + 24 };
+      const cw = screen.width / term.cols;
+      const ch = screen.height / term.rows;
+      const row = clamp(sel.end.y - term.buffer.active.viewportY - 1, 0, term.rows - 1);
+      return { x: screen.left + (sel.end.x - 0.5) * cw, y: screen.top + row * ch };
+    };
+
+    const copySelection = (x?: number, y?: number) => {
+      const s = live.current.settings;
+      const text = cleanCopy(term.getSelection(), s.terminal.trimTrailingWhitespace);
+      if (!text) return;
+      backend.clipboardWrite(text).catch(() => {});
+      if (s.terminal.copyToast) {
+        const p =
+          x !== undefined && y !== undefined
+            ? { x, y }
+            : lastPointer && Date.now() - lastPointer.at < 15_000
+              ? lastPointer
+              : selectionEndPoint();
+        useUi.getState().showCopyToast(p.x, p.y, text);
+      }
+      if (!s.terminal.copyOnSelect) term.clearSelection();
+    };
+
+    // ---- 粘贴：剪贴板从 Rust 端读，WebView 不会弹权限提示 ----
+    const doPaste = (text: string) => {
+      if (!text) return;
+      const s = live.current.settings;
+      if (s.terminal.confirmMultilinePaste && /\r?\n./.test(text) && !term.modes.bracketedPasteMode) setPaste(text);
+      else term.paste(text);
+    };
+    const pasteFromClipboard = () => backend.clipboardRead().then(doPaste).catch(() => {});
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       if (isAppShortcut(e)) return false;
       const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
+      const k = e.key.toLowerCase();
       // Ctrl+C：有选中内容时复制，没有时照常发中断信号
-      if (ctrl && !e.shiftKey && e.key.toLowerCase() === "c" && term.hasSelection()) {
+      if (ctrl && !e.shiftKey && k === "c" && term.hasSelection()) {
         copySelection();
         return false;
       }
-      if (ctrl && e.shiftKey && e.key.toLowerCase() === "c") {
+      if (ctrl && e.shiftKey && k === "c") {
         copySelection();
         return false;
       }
-      // 粘贴交给浏览器的 paste 事件（xterm 会处理括号粘贴），这里只是不让 ^V 发出去
-      if ((ctrl && e.key.toLowerCase() === "v") || (e.shiftKey && e.key === "Insert")) return false;
+      if ((ctrl && k === "v") || (e.shiftKey && !e.ctrlKey && e.key === "Insert")) {
+        e.preventDefault();
+        pasteFromClipboard();
+        return false;
+      }
       return true;
     });
 
-    // 多行粘贴确认：程序没开括号粘贴、内容又有多行时先问一下（docs/05 §5）
+    // 其它途径的粘贴（输入法、拖放文字）也走同一套确认逻辑
     const onPaste = (e: ClipboardEvent) => {
-      const text = e.clipboardData?.getData("text/plain") ?? "";
-      if (/\r?\n./.test(text) && !term.modes.bracketedPasteMode) {
-        e.preventDefault();
-        e.stopPropagation();
-        setPaste(text);
-      }
+      e.preventDefault();
+      e.stopPropagation();
+      doPaste(e.clipboardData?.getData("text/plain") ?? "");
     };
     el.addEventListener("paste", onPaste, true);
 
-    // 右键：有选中就复制，没有就粘贴
+    // ---- 右键 ----
     const onContext = (e: MouseEvent) => {
       e.preventDefault();
-      if (term.hasSelection()) copySelection();
-      else
-        navigator.clipboard
-          .readText()
-          .then((t) => (/\r?\n./.test(t) && !term.modes.bracketedPasteMode ? setPaste(t) : term.paste(t)))
-          .catch(() => {});
+      e.stopPropagation();
+      const mode = live.current.settings.terminal.rightClick;
+      // Shift+右键总是弹出菜单
+      if (mode === "menu" || e.shiftKey) {
+        const has = term.hasSelection();
+        useUi.getState().openMenu(e.clientX, e.clientY, [
+          { label: "复制", icon: "copy", hint: "Ctrl+C", disabled: !has, onSelect: () => copySelection(e.clientX, e.clientY) },
+          { label: "粘贴", icon: "paste", hint: "Ctrl+V", onSelect: pasteFromClipboard },
+          { label: "全选", icon: "select", onSelect: () => term.selectAll() },
+          "separator",
+          { label: "清除屏幕", icon: "eraser", onSelect: () => term.clear() },
+        ]);
+        return;
+      }
+      if (term.hasSelection()) copySelection(e.clientX, e.clientY);
+      else pasteFromClipboard();
     };
     el.addEventListener("contextmenu", onContext);
 
-    // 字体加载完后重新测量字符宽度
-    document.fonts?.ready.then(() => {
-      term.options.fontFamily = TERMINAL_FONT;
+    // ---- Ctrl+滚轮：只调终端字号（docs/03 §2） ----
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      useSettings.getState().update((d) => {
+        d.font.size = clamp(d.font.size + dir, LIMITS.fontSize.min, LIMITS.fontSize.max);
+      });
+      useUi.getState().showNotice(`终端字号 ${useSettings.getState().settings.font.size}`);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+
+    // 附带的 Nerd Font 符号字体和系统字体加载完后，重新测量字符宽度、重画字形
+    const remeasure = () => {
+      term.options.fontFamily = live.current.settings.font.family;
+      term.clearTextureAtlas();
       fit.fit();
-    });
+    };
+    Promise.all([document.fonts?.load(`14px "mooncli Symbols"`, ""), document.fonts?.ready]).then(remeasure, remeasure);
 
     return () => {
       ro.disconnect();
       clearTimeout(resizeTimer);
+      el.removeEventListener("mouseup", onMouseUp);
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("contextmenu", onContext);
+      el.removeEventListener("wheel", onWheel, { capture: true });
       terminals.delete(id);
       backend.close(id);
       term.dispose();
     };
-    // 终端只按 id 创建一次；主题和激活状态在下面单独处理
+    // 终端只按 id 创建一次；外观设置在下面单独更新
   }, [id]);
 
+  // 设置或主题变了：更新终端选项（字号变化后重新算行列数）
   useEffect(() => {
     const t = terminals.get(id);
-    if (t) t.term.options.theme = xtermTheme(theme);
-  }, [id, theme]);
+    if (!t) return;
+    const opts = terminalOptions(settings, theme, transparent);
+    const before = `${t.term.options.fontSize}|${t.term.options.fontFamily}|${t.term.options.lineHeight}`;
+    t.term.options = opts;
+    if (before !== `${opts.fontSize}|${opts.fontFamily}|${opts.lineHeight}`) {
+      requestAnimationFrame(() => t.fit.fit());
+    }
+  }, [id, settings, theme, transparent]);
 
   useEffect(() => {
     const t = terminals.get(id);
@@ -191,11 +290,7 @@ export function TerminalView({ id, active, theme, backend }: Props) {
 
   const confirmPaste = (ok: boolean) => {
     const t = terminals.get(id);
-    if (ok && pasteRef.current && t) {
-      const text = pasteRef.current;
-      // 大段内容在 Rust 端分块写入
-      t.term.paste(text);
-    }
+    if (ok && live.current.paste && t) t.term.paste(live.current.paste);
     setPaste(null);
     t?.term.focus();
   };
@@ -203,9 +298,7 @@ export function TerminalView({ id, active, theme, backend }: Props) {
   return (
     <div className={`term-layer${active ? " active" : ""}`} aria-hidden={!active}>
       <div className="term-host" ref={host} />
-      {paste !== null && (
-        <PasteConfirm text={paste} onDone={confirmPaste} />
-      )}
+      {paste !== null && <PasteConfirm text={paste} onDone={confirmPaste} />}
     </div>
   );
 }
@@ -231,7 +324,10 @@ function PasteConfirm({ text, onDone }: { text: string; onDone: (ok: boolean) =>
         <strong>将粘贴 {lines.length} 行</strong>
         <span>当前程序没有开启括号粘贴，可能会逐行执行</span>
       </div>
-      <pre className="paste-preview">{lines.slice(0, 4).join("\n")}{lines.length > 4 ? "\n…" : ""}</pre>
+      <pre className="paste-preview">
+        {lines.slice(0, 4).join("\n")}
+        {lines.length > 4 ? "\n…" : ""}
+      </pre>
       <div className="paste-actions">
         <button type="button" className="btn primary" onClick={() => onDone(true)}>
           粘贴 <kbd>Enter</kbd>

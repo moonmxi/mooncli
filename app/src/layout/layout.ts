@@ -63,9 +63,9 @@ export function toggleCollapsed(width: number, lastOpen: number): number {
   return width <= SIDEBAR.collapsed ? Math.max(SIDEBAR.min, lastOpen) : SIDEBAR.collapsed;
 }
 
-export function breakpoint(windowWidth: number, charWidth = REFERENCE_CHAR_WIDTH): Breakpoint {
-  // 字号越大，越早触发收起
-  const s = charWidth / REFERENCE_CHAR_WIDTH;
+export function breakpoint(windowWidth: number, charWidth = REFERENCE_CHAR_WIDTH, uiScale = 1): Breakpoint {
+  // 终端字号越大、界面尺寸越大，越早触发收起（取两者中更大的放大倍数）
+  const s = Math.max(charWidth / REFERENCE_CHAR_WIDTH, uiScale);
   if (windowWidth >= 1280 * s) return "xl";
   if (windowWidth >= 960 * s) return "lg";
   if (windowWidth >= 720 * s) return "md";
@@ -83,18 +83,22 @@ export interface LayoutInput {
   panelOpen: boolean;
   panelPinned: boolean;
   panelWidth: number;
+  /** 界面尺寸（已乘上整体缩放）。侧栏、面板的宽度都按它放大 */
+  uiScale?: number;
 }
 
 export interface Layout {
   bp: Breakpoint;
-  sidebar: { mode: "docked" | "drawer" | "none"; width: number; density: Density; drawerOpen: boolean };
-  panel: { mode: "docked" | "overlay" | "closed"; width: number };
+  /** width 是侧栏自己的 CSS 宽度（未放大），px 是占用的屏幕宽度 */
+  sidebar: { mode: "docked" | "drawer" | "none"; width: number; px: number; density: Density; drawerOpen: boolean };
+  panel: { mode: "docked" | "overlay" | "closed"; width: number; px: number };
   terminalWidth: number;
 }
 
 export function computeLayout(i: LayoutInput): Layout {
   const cw = i.charWidth ?? REFERENCE_CHAR_WIDTH;
-  const bp = breakpoint(i.windowWidth, cw);
+  const ui = i.uiScale ?? 1;
+  const bp = breakpoint(i.windowWidth, cw, ui);
   const min60 = 60 * cw + TERMINAL_PADDING;
 
   let sidebarMode: Layout["sidebar"]["mode"] = i.tabsPosition === "top" ? "none" : "docked";
@@ -112,21 +116,23 @@ export function computeLayout(i: LayoutInput): Layout {
   }
 
   const docked = () =>
-    (sidebarMode === "docked" ? sidebarWidth : 0) + (panelMode === "docked" ? i.panelWidth : 0);
+    ((sidebarMode === "docked" ? sidebarWidth : 0) + (panelMode === "docked" ? i.panelWidth : 0)) * ui;
   // 终端少于 60 列时，先让右侧面板浮起来，再让侧栏变成抽屉
   if (i.windowWidth - docked() < min60 && panelMode === "docked") panelMode = "overlay";
   if (i.windowWidth - docked() < min60 && sidebarMode === "docked") sidebarMode = "drawer";
 
   const drawerWidth = Math.max(sidebarWidth, SIDEBAR.default);
+  const sw = sidebarMode === "drawer" ? drawerWidth : sidebarWidth;
   return {
     bp,
     sidebar: {
       mode: sidebarMode,
-      width: sidebarMode === "drawer" ? drawerWidth : sidebarWidth,
-      density: density(sidebarMode === "drawer" ? drawerWidth : sidebarWidth),
+      width: sw,
+      px: sw * ui,
+      density: density(sw),
       drawerOpen: sidebarMode === "drawer" && i.drawerOpen,
     },
-    panel: { mode: panelMode, width: i.panelWidth },
+    panel: { mode: panelMode, width: i.panelWidth, px: i.panelWidth * ui },
     terminalWidth: i.windowWidth - docked(),
   };
 }

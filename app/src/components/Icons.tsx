@@ -20,6 +20,22 @@ const paths: Record<string, string> = {
   menu: "M4 7h16 M4 12h16 M4 17h16",
   layout: "M4 5h16v14H4Z M9 5v14",
   close: "M6 6l12 12 M18 6 6 18",
+  copy: "M9 9h10v10H9Z M5 15V5h10",
+  paste: "M9 4h6v3H9Z M7 5.5H5.5v14h13v-14H17",
+  select: "M4 8V4h4 M16 4h4v4 M20 16v4h-4 M8 20H4v-4",
+  eraser: "M8 20h12 M4.5 15.5l9-9a2 2 0 0 1 2.8 0l2.2 2.2a2 2 0 0 1 0 2.8l-6.5 6.5H8.5Z",
+  pin: "M9 4h6l-1 6 3 3H7l3-3Z M12 13v7",
+  edit: "M4 20h4L19 9l-4-4L4 16v4Z",
+  duplicate: "M8 8h11v11H8Z M5 16V5h11",
+  folder: "M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17.5Z",
+  history: "M4 12a8 8 0 1 0 2.3-5.6 M4 5v4h4 M12 8v4l3 2",
+  zoom: "M11 5a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z M20 20l-4.2-4.2 M8.5 11h5 M11 8.5v5",
+  text: "M5 6h14 M12 6v13 M9 19h6",
+  image: "M4 5h16v14H4Z M4 16l5-5 4 4 2-2 5 5 M15 9h.01",
+  keyboard: "M3 7h18v11H3Z M7 11h.01 M11 11h.01 M15 11h.01 M8 14.5h8",
+  info: "M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16Z M12 11v5 M12 8h.01",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  trash: "M5 7h14 M10 7V5h4v2 M7 7l1 13h8l1-13",
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {

@@ -11,6 +11,8 @@ export interface Tab {
   profile: string;
   title: TitleParts;
   cwd?: string;
+  /** 新建时指定的起始目录（复制标签页时用） */
+  initialCwd?: string;
   remote?: { host: string; user?: string };
   shellState: ShellState;
   running?: { text?: string; kind: ProgramKind; since: number };
@@ -19,69 +21,53 @@ export interface Tab {
   exited?: { code: number | null };
   env?: { pwsh?: string; host?: string; admin?: boolean };
   progress?: { state: number; value: number };
+  /** 置顶：排在最前面，快捷键关不掉（docs/06 §6） */
+  pinned?: boolean;
+  /** 标签颜色，取主题的 ANSI 色名 */
+  color?: TabColor;
 }
+
+export const TAB_COLORS = ["red", "yellow", "green", "cyan", "blue", "magenta"] as const;
+export type TabColor = (typeof TAB_COLORS)[number];
 
 const LONG_COMMAND_MS = 30_000;
-const PREFS_KEY = "mooncli.layout";
+const UI_KEY = "mooncli.ui";
 
-interface Prefs {
-  sidebarWidth: number;
-  lastOpenWidth: number;
-  tabsPosition: "left" | "top";
-  autoCollapse: boolean;
-  theme: string;
-}
-
-function loadPrefs(): Prefs {
-  const d: Prefs = {
-    sidebarWidth: SIDEBAR.default,
-    lastOpenWidth: SIDEBAR.default,
-    tabsPosition: "left",
-    autoCollapse: true,
-    theme: "moon-paper",
-  };
+function loadLastOpenWidth(): number {
   try {
-    return { ...d, ...JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") };
+    return JSON.parse(localStorage.getItem(UI_KEY) ?? "{}").lastOpenWidth ?? SIDEBAR.default;
   } catch {
-    return d;
+    return SIDEBAR.default;
   }
 }
 
-function savePrefs(p: Prefs) {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
-  } catch {
-    // 存不了就算了，只是下次打开回到默认布局
-  }
+/** 显示顺序：置顶的在前，其余保持原来的顺序 */
+export function orderedTabs(tabs: Tab[]): Tab[] {
+  return [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
 }
 
-interface State extends Prefs {
+interface State {
   tabs: Tab[];
   activeId?: string;
   drawerOpen: boolean;
   focused: boolean;
-  addTab(id: string, profile?: string): void;
+  /** 侧栏上次展开时的宽度，双击收起后再展开要回到这里 */
+  lastOpenWidth: number;
+  /** 正在改名的标签页 */
+  editingId?: string;
+  addTab(id: string, opts?: { profile?: string; cwd?: string }): void;
   closeTab(id: string): void;
   activate(id: string): void;
   cycle(delta: number): void;
   activateIndex(i: number): void;
   rename(id: string, title?: string): void;
+  setEditing(id?: string): void;
+  togglePin(id: string): void;
+  setColor(id: string, color?: TabColor): void;
   apply(id: string, msg: SessionMsg, now?: number): void;
-  setSidebarWidth(w: number): void;
-  setTabsPosition(p: "left" | "top"): void;
-  setTheme(name: string): void;
+  rememberOpenWidth(w: number): void;
   setDrawerOpen(open: boolean): void;
   setFocused(f: boolean): void;
-}
-
-function prefsOf(s: State): Prefs {
-  return {
-    sidebarWidth: s.sidebarWidth,
-    lastOpenWidth: s.lastOpenWidth,
-    tabsPosition: s.tabsPosition,
-    autoCollapse: s.autoCollapse,
-    theme: s.theme,
-  };
 }
 
 export const useStore = create<State>((set, get) => {
@@ -89,21 +75,28 @@ export const useStore = create<State>((set, get) => {
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === id ? { ...t, ...f(t) } : t)) }));
 
   return {
-    ...loadPrefs(),
     tabs: [],
     drawerOpen: false,
     focused: true,
+    lastOpenWidth: loadLastOpenWidth(),
 
-    addTab(id, profile = "日常") {
-      set((s) => ({ tabs: [...s.tabs, { id, profile, title: {}, shellState: "unknown" }], activeId: id }));
+    addTab(id, opts = {}) {
+      set((s) => ({
+        tabs: [
+          ...s.tabs,
+          { id, profile: opts.profile ?? "日常", title: {}, shellState: "unknown", initialCwd: opts.cwd, cwd: opts.cwd },
+        ],
+        activeId: id,
+      }));
     },
 
     closeTab(id) {
       set((s) => {
-        const i = s.tabs.findIndex((t) => t.id === id);
-        const tabs = s.tabs.filter((t) => t.id !== id);
-        const activeId = s.activeId === id ? tabs[Math.min(i, tabs.length - 1)]?.id : s.activeId;
-        return { tabs, activeId };
+        const order = orderedTabs(s.tabs);
+        const i = order.findIndex((t) => t.id === id);
+        const rest = order.filter((t) => t.id !== id);
+        const activeId = s.activeId === id ? rest[Math.min(i, rest.length - 1)]?.id : s.activeId;
+        return { tabs: s.tabs.filter((t) => t.id !== id), activeId };
       });
     },
 
@@ -118,14 +111,27 @@ export const useStore = create<State>((set, get) => {
 
     cycle(delta) {
       const { tabs, activeId } = get();
-      if (tabs.length === 0) return;
-      const i = tabs.findIndex((t) => t.id === activeId);
-      get().activate(tabs[(i + delta + tabs.length) % tabs.length].id);
+      const order = orderedTabs(tabs);
+      if (order.length === 0) return;
+      const i = order.findIndex((t) => t.id === activeId);
+      get().activate(order[(i + delta + order.length) % order.length].id);
     },
 
     activateIndex(i) {
-      const t = get().tabs[i];
+      const t = orderedTabs(get().tabs)[i];
       if (t) get().activate(t.id);
+    },
+
+    setEditing(id) {
+      set({ editingId: id });
+    },
+
+    togglePin(id) {
+      patch(id, (t) => ({ pinned: !t.pinned }));
+    },
+
+    setColor(id, color) {
+      patch(id, () => ({ color }));
     },
 
     rename(id, title) {
@@ -193,19 +199,14 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    setSidebarWidth(w) {
-      set((s) => ({ sidebarWidth: w, lastOpenWidth: w > SIDEBAR.collapsed ? w : s.lastOpenWidth }));
-      savePrefs(prefsOf(get()));
-    },
-
-    setTabsPosition(p) {
-      set({ tabsPosition: p });
-      savePrefs(prefsOf(get()));
-    },
-
-    setTheme(name) {
-      set({ theme: name });
-      savePrefs(prefsOf(get()));
+    rememberOpenWidth(w) {
+      if (w <= SIDEBAR.collapsed) return;
+      set({ lastOpenWidth: w });
+      try {
+        localStorage.setItem(UI_KEY, JSON.stringify({ lastOpenWidth: w }));
+      } catch {
+        // 存不了就算了
+      }
     },
 
     setDrawerOpen(open) {

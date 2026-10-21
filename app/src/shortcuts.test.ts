@@ -18,6 +18,18 @@ describe("终端级快捷键", () => {
     expect(matchShortcut(key("3", { alt: true }, "Digit3"))).toEqual({ type: "gotoTab", index: 2 });
   });
 
+  it("缩放、设置、命令面板", () => {
+    expect(matchShortcut(key("=", { ctrl: true }, "Equal"))).toEqual({ type: "zoom", dir: 1 });
+    expect(matchShortcut(key("+", { ctrl: true, shift: true }, "Equal"))).toEqual({ type: "zoom", dir: 1 });
+    expect(matchShortcut(key("-", { ctrl: true }, "Minus"))).toEqual({ type: "zoom", dir: -1 });
+    expect(matchShortcut(key("-", { ctrl: true }, "NumpadSubtract"))).toEqual({ type: "zoom", dir: -1 });
+    expect(matchShortcut(key("0", { ctrl: true }, "Digit0"))).toEqual({ type: "zoom", dir: 0 });
+    expect(matchShortcut(key(",", { ctrl: true }, "Comma"))).toEqual({ type: "settings" });
+    expect(matchShortcut(key("P", { ctrl: true, shift: true }, "KeyP"))).toEqual({ type: "palette" });
+    // AltGr（= Ctrl+Alt）打出来的字符不能被当成缩放
+    expect(matchShortcut(key("-", { ctrl: true, alt: true }, "Minus"))).toBeNull();
+  });
+
   it("shell 和 vim 常用的键不拦", () => {
     for (const k of [
       key("Tab"),

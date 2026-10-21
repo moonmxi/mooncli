@@ -1,7 +1,6 @@
 //! 用真实的 pwsh 跑 shell/pwsh/MoonCli.ps1，检查标记、命令文本、退出码、目录。
 //! 机器上没有 pwsh 时跳过（会打印提示）。
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -90,13 +89,12 @@ fn pwsh_integration_script_end_to_end() {
         eprintln!("没找到 pwsh，跳过");
         return;
     };
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shell/pwsh/MoonCli.ps1");
     let tmp = std::env::temp_dir();
     let opts = launch(LaunchRequest {
         shell: &shell,
         // -NoProfile：测试不受本机 profile 影响
         extra_args: &["-NoProfile".to_string()],
-        integration_script: Some(&script),
+        integration: true,
         session_id: "it",
         cwd: Some(tmp.display().to_string()),
         cols: 120,
@@ -113,6 +111,12 @@ fn pwsh_integration_script_end_to_end() {
     rec.wait("env 私有序列", |r| {
         r.events.lock().unwrap().iter().any(|e| matches!(e, ShellEvent::Private { kind, .. } if kind == "env"))
     });
+    // 集成脚本放在模块里：辅助函数和变量不能漏到用户的全局作用域
+    s.write(b"if ((Get-Command Osc -ErrorAction Ignore) -or (Get-Variable Nonce -Scope Global -ErrorAction Ignore)) { 'LE'+'AK' } else { 'CL'+'EAN' }\r").unwrap();
+    rec.wait("作用域检查结束", |r| !r.finished().is_empty());
+    assert!(String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("CLEAN"));
+    assert!(!String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("LEAK"));
+    rec.updates.lock().unwrap().clear();
     // 私有序列不应该出现在显示的输出里
     assert!(!String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("6973"));
 

@@ -105,6 +105,13 @@ describe("响应式", () => {
     const l = computeLayout({ ...base, windowWidth: 760, sidebarWidth: 360, autoCollapse: false });
     expect(l.sidebar.mode).toBe("drawer");
   });
+  it("界面放大时侧栏占的屏幕宽度跟着放大，断点提前", () => {
+    const l = computeLayout({ ...base, windowWidth: 1440, uiScale: 1.5 });
+    expect(l.sidebar).toMatchObject({ width: 220, px: 330 });
+    expect(l.bp).toBe("lg");
+    expect(computeLayout({ ...base, windowWidth: 1300, uiScale: 1.5 }).bp).toBe("md");
+  });
+
   it("顶部标签布局没有侧栏", () => {
     expect(computeLayout({ ...base, tabsPosition: "top" }).sidebar.mode).toBe("none");
   });

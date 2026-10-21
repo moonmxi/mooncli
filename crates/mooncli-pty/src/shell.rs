@@ -79,8 +79,8 @@ pub fn new_nonce() -> String {
 pub struct LaunchRequest<'a> {
     pub shell: &'a ShellSpec,
     pub extra_args: &'a [String],
-    /// 集成脚本 MoonCli.ps1 的路径；`None` 表示不开集成
-    pub integration_script: Option<&'a Path>,
+    /// 是否加载 shell 集成（脚本已编进程序，见 [`INTEGRATION_SCRIPT`]）
+    pub integration: bool,
     pub session_id: &'a str,
     pub cwd: Option<String>,
     pub cols: u16,
@@ -88,20 +88,44 @@ pub struct LaunchRequest<'a> {
     pub app_version: &'a str,
 }
 
+/// pwsh 集成脚本，编进程序里，不依赖安装目录里的文件。
+pub const INTEGRATION_SCRIPT: &str = include_str!("../../../shell/pwsh/MoonCli.ps1");
+
+/// 启动 pwsh 时执行的命令：把集成脚本作为动态模块加载。
+///
+/// 为什么不直接点加载（dot-source）脚本文件：
+/// - 脚本文件受用户的执行策略限制，有些机器上会被拦下；字符串形式的脚本块不受限制
+/// - 不用关心安装目录的路径（Windows 上可能带 `\\?\` 前缀、空格、引号）
+/// - 放在模块里，脚本内部的变量和辅助函数不会污染用户的全局作用域
+///
+/// 加载失败时打印一行提示，终端照常可用（docs/02 §3）。
+pub fn integration_bootstrap() -> String {
+    format!(
+        "try {{ $null = New-Module -Name MoonCli -ScriptBlock {{\n{INTEGRATION_SCRIPT}\n}} }} catch {{ \
+         Write-Host \"mooncli: shell 集成没有加载成功（$($_.Exception.Message)）。终端照常可用，只是没有智能功能。\" -ForegroundColor DarkYellow }}"
+    )
+}
+
+/// `-EncodedCommand` 要的格式：UTF-16LE 再 base64。
+pub fn encode_command(script: &str) -> String {
+    use base64::Engine;
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 /// 拼出完整的启动参数和环境变量。
 pub fn launch(req: LaunchRequest) -> SpawnOptions {
     let is_ps = matches!(req.shell.kind, ShellKind::Pwsh | ShellKind::WindowsPowerShell);
-    let script = req.integration_script.filter(|_| is_ps);
-    let nonce = script.map(|_| new_nonce());
+    let integrate = req.integration && is_ps;
+    let nonce = integrate.then(new_nonce);
     let mut args: Vec<String> = Vec::new();
     if is_ps {
         args.push("-NoLogo".into());
     }
     args.extend(req.extra_args.iter().cloned());
-    if let Some(s) = script {
-        // 用户 profile 照常先加载；集成脚本出错不影响使用（docs/02 §3）
-        let quoted = s.display().to_string().replace('\'', "''");
-        args.extend(["-NoExit".into(), "-Command".into(), format!("try {{ . '{quoted}' }} catch {{ }}")]);
+    if integrate {
+        // 用户 profile 照常先加载，集成脚本在它之后运行
+        args.extend(["-NoExit".into(), "-EncodedCommand".into(), encode_command(&integration_bootstrap())]);
     }
     let mut env = vec![
         ("TERM_PROGRAM".to_string(), "mooncli".to_string()),
@@ -153,6 +177,14 @@ mod tests {
     }
 
     #[test]
+    fn encoded_command_roundtrip() {
+        use base64::Engine;
+        let b = base64::engine::general_purpose::STANDARD.decode(encode_command("Write-Host '月'")).unwrap();
+        let units: Vec<u16> = b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(String::from_utf16(&units).unwrap(), "Write-Host '月'");
+    }
+
+    #[test]
     fn nonce_is_random_hex() {
         let (a, b) = (new_nonce(), new_nonce());
         assert_eq!(a.len(), 32);
@@ -163,11 +195,10 @@ mod tests {
     #[test]
     fn pwsh_launch_has_integration_and_env() {
         let shell = ShellSpec { program: PathBuf::from(r"C:\pf\pwsh.exe"), kind: ShellKind::Pwsh };
-        let script = PathBuf::from(r"C:\Program Files\moon's\MoonCli.ps1");
         let o = launch(LaunchRequest {
             shell: &shell,
             extra_args: &[],
-            integration_script: Some(&script),
+            integration: true,
             session_id: "tab-1",
             cwd: None,
             cols: 120,
@@ -175,8 +206,9 @@ mod tests {
             app_version: "0.1.0",
         });
         assert_eq!(o.args[0], "-NoLogo");
-        assert_eq!(o.args[1..3], ["-NoExit", "-Command"]);
-        assert!(o.args[3].contains("moon''s"), "单引号要转义: {}", o.args[3]);
+        assert_eq!(o.args[1..3], ["-NoExit", "-EncodedCommand"]);
+        // Windows 命令行最长 32767 个字符
+        assert!(o.args[3].len() < 30_000, "编码后的命令太长: {}", o.args[3].len());
         let nonce = o.nonce.clone().unwrap();
         assert!(o.env.contains(&("MOONCLI_NONCE".into(), nonce)));
         assert!(o.env.contains(&("MOONCLI_SESSION_ID".into(), "tab-1".into())));
@@ -188,7 +220,7 @@ mod tests {
         let o = launch(LaunchRequest {
             shell: &shell,
             extra_args: &[],
-            integration_script: Some(Path::new("/x/MoonCli.ps1")),
+            integration: true,
             session_id: "t",
             cwd: None,
             cols: 80,

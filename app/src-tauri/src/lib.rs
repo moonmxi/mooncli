@@ -1,27 +1,49 @@
-//! mooncli 主程序：窗口、会话管理、历史库。界面在 app/src/。
+//! mooncli 主程序：窗口、会话管理、设置、剪贴板、历史库。界面在 app/src/。
 
 mod conpty;
+mod files;
 mod session;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use mooncli_config::Settings;
 use mooncli_history::{Hit, Query, Store};
 use mooncli_pty::Session;
 use mooncli_pty::shell::{LaunchRequest, ShellSpec, find_shell, launch};
+use serde::Serialize;
 use session::{UiMsg, UiSink};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
 struct AppState {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
-    shell: Option<ShellSpec>,
-    script: Option<PathBuf>,
+    shell: Mutex<Option<ShellSpec>>,
     history: Arc<Mutex<Option<Store>>>,
+    /// 界面保存的原样设置（JSON）。Rust 端只读其中自己用得到的字段。
+    settings: Mutex<serde_json::Value>,
+    settings_path: PathBuf,
+    backgrounds_dir: PathBuf,
+    history_path: PathBuf,
+    /// 剪贴板对象要一直留着：Linux 上它一释放，写进去的内容就没了
+    clipboard: Mutex<Option<arboard::Clipboard>>,
+    bundled_conpty: bool,
+}
+
+impl AppState {
+    fn typed_settings(&self) -> Settings {
+        serde_json::from_value(self.settings.lock().unwrap().clone()).unwrap_or_default()
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
+
+fn err(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}
+
+// ---- 会话 --------------------------------------------------------------------
 
 #[tauri::command]
 fn session_create(
@@ -32,15 +54,18 @@ fn session_create(
     cwd: Option<String>,
     channel: Channel<UiMsg>,
 ) -> CmdResult<()> {
+    let settings = state.typed_settings();
     let shell = state
         .shell
-        .as_ref()
-        .ok_or("没有找到 PowerShell 7（pwsh.exe）。请先安装：winget install Microsoft.PowerShell")?;
-    let cwd = cwd.or_else(|| std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok());
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("没有找到 PowerShell 7（pwsh.exe）。可以在终端里运行 winget install Microsoft.PowerShell 安装，或在设置 → Shell 里指定路径。")?;
+    let cwd = cwd.filter(|c| std::path::Path::new(c).is_dir()).or_else(dirs_home);
     let opts = launch(LaunchRequest {
-        shell,
-        extra_args: &[],
-        integration_script: state.script.as_deref(),
+        shell: &shell,
+        extra_args: &settings.shell.args,
+        integration: settings.shell.integration,
         session_id: &id,
         cwd,
         cols,
@@ -48,10 +73,14 @@ fn session_create(
         app_version: env!("CARGO_PKG_VERSION"),
     });
     let sink = Arc::new(UiSink::new(id.clone(), channel, state.history.clone()));
-    let session = Session::spawn(opts, sink).map_err(|e| e.to_string())?;
+    let session = Session::spawn(opts, sink).map_err(err)?;
     // 同一个 id 再创建（比如界面重新加载）时，旧会话随 drop 结束
     state.sessions.lock().unwrap().insert(id, Arc::new(session));
     Ok(())
+}
+
+fn dirs_home() -> Option<String> {
+    std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()
 }
 
 fn with_session<T>(state: &State<'_, AppState>, id: &str, f: impl FnOnce(&Session) -> T) -> CmdResult<T> {
@@ -61,12 +90,12 @@ fn with_session<T>(state: &State<'_, AppState>, id: &str, f: impl FnOnce(&Sessio
 
 #[tauri::command]
 fn session_write(state: State<'_, AppState>, id: String, data: String) -> CmdResult<()> {
-    with_session(&state, &id, |s| s.write_chunked(data.as_bytes()))?.map_err(|e| e.to_string())
+    with_session(&state, &id, |s| s.write_chunked(data.as_bytes()))?.map_err(err)
 }
 
 #[tauri::command]
 fn session_resize(state: State<'_, AppState>, id: String, cols: u16, rows: u16) -> CmdResult<()> {
-    with_session(&state, &id, |s| s.resize(cols, rows))?.map_err(|e| e.to_string())
+    with_session(&state, &id, |s| s.resize(cols, rows))?.map_err(err)
 }
 
 #[tauri::command]
@@ -79,19 +108,120 @@ fn session_close(state: State<'_, AppState>, id: String) {
     state.sessions.lock().unwrap().remove(&id);
 }
 
+// ---- 历史 --------------------------------------------------------------------
+
 #[tauri::command]
 fn history_search(state: State<'_, AppState>, query: Query) -> CmdResult<Vec<Hit>> {
     let h = state.history.lock().unwrap();
-    let store = h.as_ref().ok_or("历史库没有打开")?;
-    store.search(&query).map_err(|e| e.to_string())
+    let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
+    store.search(&query).map_err(err)
 }
 
-/// 集成脚本：安装后在资源目录；开发时直接用仓库里的。
-fn find_script(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let installed = app.path().resolve("shell/MoonCli.ps1", tauri::path::BaseDirectory::Resource).ok();
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../shell/pwsh/MoonCli.ps1");
-    installed.into_iter().chain([dev]).find(|p| p.is_file())
+// ---- 设置 --------------------------------------------------------------------
+
+#[tauri::command]
+fn settings_get(state: State<'_, AppState>) -> serde_json::Value {
+    state.settings.lock().unwrap().clone()
 }
+
+#[tauri::command]
+fn settings_set(state: State<'_, AppState>, value: serde_json::Value) -> CmdResult<()> {
+    // 先按 Rust 端的结构检查一遍类型，写错了就拒绝，不把坏文件写到磁盘上
+    let typed: Settings = serde_json::from_value(value.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
+    let shell_changed = typed.shell.path != state.typed_settings().shell.path;
+    files::write_atomic(&state.settings_path, serde_json::to_string_pretty(&value).map_err(err)?.as_bytes())
+        .map_err(|e| format!("保存设置失败：{e}"))?;
+    *state.settings.lock().unwrap() = value;
+    if shell_changed {
+        *state.shell.lock().unwrap() = find_shell(typed.shell.path.as_deref());
+    }
+    Ok(())
+}
+
+// ---- 剪贴板（走系统接口，WebView 不会弹出权限提示） ------------------------------
+
+fn with_clipboard<T>(
+    state: &State<'_, AppState>,
+    f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+) -> CmdResult<T> {
+    let mut guard = state.clipboard.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(arboard::Clipboard::new().map_err(|e| format!("打不开剪贴板：{e}"))?);
+    }
+    f(guard.as_mut().unwrap()).map_err(|e| format!("剪贴板出错：{e}"))
+}
+
+#[tauri::command]
+fn clipboard_read(state: State<'_, AppState>) -> CmdResult<String> {
+    match with_clipboard(&state, |c| c.get_text()) {
+        Ok(t) => Ok(t),
+        // 剪贴板里是图片或者是空的
+        Err(_) => Ok(String::new()),
+    }
+}
+
+#[tauri::command]
+fn clipboard_write(state: State<'_, AppState>, text: String) -> CmdResult<()> {
+    with_clipboard(&state, |c| c.set_text(text))
+}
+
+// ---- 背景图 ------------------------------------------------------------------
+
+#[tauri::command]
+fn background_save(state: State<'_, AppState>, file_name: String, data_base64: String) -> CmdResult<String> {
+    files::save_background(&state.backgrounds_dir, &file_name, &data_base64)
+}
+
+#[tauri::command]
+fn background_load(state: State<'_, AppState>, name: String) -> CmdResult<String> {
+    files::load_background(&state.backgrounds_dir, &name)
+}
+
+#[tauri::command]
+fn background_list(state: State<'_, AppState>) -> Vec<String> {
+    files::list_backgrounds(&state.backgrounds_dir)
+}
+
+#[tauri::command]
+fn background_delete(state: State<'_, AppState>, name: String) -> CmdResult<()> {
+    files::delete_background(&state.backgrounds_dir, &name)
+}
+
+// ---- 诊断 --------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Diagnostics {
+    app_version: &'static str,
+    os: &'static str,
+    shell_path: Option<String>,
+    shell_kind: Option<String>,
+    integration_enabled: bool,
+    bundled_conpty: bool,
+    settings_path: String,
+    history_path: String,
+    history_count: Option<i64>,
+    backgrounds_dir: String,
+}
+
+#[tauri::command]
+fn diagnostics(state: State<'_, AppState>) -> Diagnostics {
+    let shell = state.shell.lock().unwrap().clone();
+    Diagnostics {
+        app_version: env!("CARGO_PKG_VERSION"),
+        os: std::env::consts::OS,
+        shell_path: shell.as_ref().map(|s| s.program.display().to_string()),
+        shell_kind: shell.as_ref().map(|s| format!("{:?}", s.kind)),
+        integration_enabled: state.typed_settings().shell.integration,
+        bundled_conpty: state.bundled_conpty,
+        settings_path: state.settings_path.display().to_string(),
+        history_path: state.history_path.display().to_string(),
+        history_count: state.history.lock().unwrap().as_ref().and_then(|s| s.count().ok()),
+        backgrounds_dir: state.backgrounds_dir.display().to_string(),
+    }
+}
+
+// ---- 启动 --------------------------------------------------------------------
 
 fn psreadline_history_path() -> Option<PathBuf> {
     let p = if cfg!(windows) {
@@ -103,11 +233,10 @@ fn psreadline_history_path() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-fn open_history(app: &tauri::AppHandle) -> Option<Store> {
-    let dir = app.path().app_local_data_dir().ok()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    let store = Store::open(dir.join("history.db")).map_err(|e| eprintln!("mooncli: 打开历史库失败: {e}")).ok()?;
-    if let Some(p) = psreadline_history_path()
+fn open_history(path: &std::path::Path, import: bool) -> Option<Store> {
+    let store = Store::open(path).map_err(|e| eprintln!("mooncli: 打开历史库失败: {e}")).ok()?;
+    if import
+        && let Some(p) = psreadline_history_path()
         && let Ok(content) = std::fs::read_to_string(&p)
     {
         let host = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).ok();
@@ -130,17 +259,34 @@ fn open_history(app: &tauri::AppHandle) -> Option<Store> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            conpty::prefer_bundled(app.handle());
+            let bundled_conpty = conpty::prefer_bundled(app.handle());
+            let config_dir = app.path().app_config_dir()?;
+            let data_dir = app.path().app_local_data_dir()?;
+            std::fs::create_dir_all(&config_dir)?;
+            std::fs::create_dir_all(&data_dir)?;
+            let settings_path = config_dir.join("settings.json");
+            let settings = files::read_settings(&settings_path);
+            let typed: Settings = serde_json::from_value(settings.clone()).unwrap_or_default();
+            let history_path = data_dir.join("history.db");
+
             let history = Arc::new(Mutex::new(None));
-            let h = history.clone();
-            let handle = app.handle().clone();
-            // 历史库在后台打开，不拖慢启动
-            std::thread::spawn(move || *h.lock().unwrap() = open_history(&handle));
+            if typed.history.enabled {
+                let h = history.clone();
+                let p = history_path.clone();
+                let import = typed.history.import_psreadline;
+                // 历史库在后台打开，不拖慢启动
+                std::thread::spawn(move || *h.lock().unwrap() = open_history(&p, import));
+            }
             app.manage(AppState {
                 sessions: Mutex::new(HashMap::new()),
-                shell: find_shell(None),
-                script: find_script(app.handle()),
+                shell: Mutex::new(find_shell(typed.shell.path.as_deref())),
                 history,
+                settings: Mutex::new(settings),
+                settings_path,
+                backgrounds_dir: config_dir.join("backgrounds"),
+                history_path,
+                clipboard: Mutex::new(None),
+                bundled_conpty,
             });
             Ok(())
         })
@@ -150,7 +296,16 @@ pub fn run() {
             session_resize,
             session_ack,
             session_close,
-            history_search
+            history_search,
+            settings_get,
+            settings_set,
+            clipboard_read,
+            clipboard_write,
+            background_save,
+            background_load,
+            background_list,
+            background_delete,
+            diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("启动 mooncli 失败");

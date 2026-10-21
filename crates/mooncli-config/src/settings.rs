@@ -7,10 +7,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, jsonc};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub theme: ThemeChoice,
+    /// 整体缩放（界面和终端一起），Ctrl+= / Ctrl+- / Ctrl+0
+    pub zoom: f32,
+    /// 只缩放标题栏、侧栏、状态栏这些界面部分，和终端字号互不影响
+    pub ui_scale: f32,
     pub font: Font,
     pub background: Background,
     pub window: Window,
@@ -18,6 +22,23 @@ pub struct Settings {
     pub terminal: Terminal,
     pub shell: Shell,
     pub history: History,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::default(),
+            zoom: 1.0,
+            ui_scale: 1.0,
+            font: Font::default(),
+            background: Background::default(),
+            window: Window::default(),
+            tabs: Tabs::default(),
+            terminal: Terminal::default(),
+            shell: Shell::default(),
+            history: History::default(),
+        }
+    }
 }
 
 /// `"theme": "frost"`，或 `"theme": { "light": …, "dark": …, "follow": "system" }`
@@ -65,30 +86,36 @@ pub enum Follow {
     Off,
 }
 
+/// 默认终端字体：英文 → Nerd Font 图标 → 中文 → 彩色 emoji → 符号 → 系统等宽字体兜底（docs/03 §2）。
+/// 和 app/src/state/settings.ts 里的保持一致。
+/// "mooncli Symbols" 是程序附带的 Nerd Font 符号字体，保证提示符美化工具的图标总能显示。
+pub const DEFAULT_FONT_FAMILY: &str = r#""Cascadia Code", "Cascadia Mono", Consolas, "mooncli Symbols", "Microsoft YaHei UI", "Segoe UI Emoji", "Segoe UI Symbol", monospace, "Noto Color Emoji""#;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Font {
-    pub family: Vec<String>,
+    /// CSS 写法的字体回退链
+    pub family: String,
     pub size: f32,
     pub line_height: f32,
     pub letter_spacing: f32,
     pub weight: String,
     pub weight_bold: String,
     pub ligatures: bool,
-    pub ui_family: Vec<String>,
+    pub ui_family: String,
 }
 
 impl Default for Font {
     fn default() -> Self {
         Self {
-            family: vec!["Cascadia Code".into(), "Microsoft YaHei UI".into(), "Symbols Nerd Font Mono".into()],
+            family: DEFAULT_FONT_FAMILY.into(),
             size: 14.0,
             line_height: 1.25,
             letter_spacing: 0.0,
             weight: "normal".into(),
             weight_bold: "bold".into(),
             ligatures: true,
-            ui_family: vec!["Segoe UI Variable Text".into(), "Microsoft YaHei UI".into()],
+            ui_family: r#""Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif"#.into(),
         }
     }
 }
@@ -193,6 +220,10 @@ pub struct Terminal {
     pub copy_on_select: bool,
     pub trim_trailing_whitespace: bool,
     pub confirm_multiline_paste: bool,
+    /// 右键：`copyPaste`（有选中就复制，否则粘贴）或 `menu`（弹出菜单）
+    pub right_click: String,
+    /// 复制后弹出"已复制"小卡片
+    pub copy_toast: bool,
 }
 
 impl Default for Terminal {
@@ -206,6 +237,8 @@ impl Default for Terminal {
             copy_on_select: false,
             trim_trailing_whitespace: true,
             confirm_multiline_paste: true,
+            right_click: "copyPaste".into(),
+            copy_toast: true,
         }
     }
 }
@@ -284,6 +317,7 @@ mod tests {
         assert!(s.tabs.sidebar.auto_collapse);
         assert_eq!(s.font.size, 15.0);
         assert_eq!(s.font.line_height, 1.25);
+        assert_eq!(s.zoom, 1.0);
     }
 
     #[test]

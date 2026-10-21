@@ -1,0 +1,582 @@
+// 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键。改动立即生效并自动保存。
+import { useEffect, useMemo, useRef, useState } from "react";
+import { bytesToBase64 } from "../../backend/base64";
+import type { Backend, Diagnostics } from "../../backend/types";
+import { SIDEBAR } from "../../layout/layout";
+import {
+  DEFAULTS,
+  LIMITS,
+  chooseTheme,
+  effectiveFontSize,
+  pickTheme,
+  useSettings,
+  zoomStep,
+  type AppSettings,
+} from "../../state/settings";
+import { useStore } from "../../state/store";
+import { useUi, type SettingsSection } from "../../state/ui";
+import { BUILTIN_BACKGROUNDS, isBuiltin, renderBuiltin } from "../../theme/backgrounds";
+import { builtinThemes, type Theme } from "../../theme/theme";
+import { Icon } from "../Icons";
+import { Group, Row, Segmented, Select, Slider, TextInput, Toggle } from "./controls";
+
+const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
+  { id: "appearance", label: "外观", icon: "palette" },
+  { id: "font", label: "字体与缩放", icon: "text" },
+  { id: "terminal", label: "终端", icon: "pwsh" },
+  { id: "tabs", label: "标签栏", icon: "layout" },
+  { id: "shell", label: "Shell 与诊断", icon: "info" },
+  { id: "keys", label: "快捷键", icon: "keyboard" },
+];
+
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+type Update = (f: (d: AppSettings) => void) => void;
+
+export function SettingsPage({ backend, systemDark }: { backend: Backend; systemDark: boolean }) {
+  const open = useUi((s) => s.settings.open);
+  const section = useUi((s) => s.settings.section);
+  const openSection = useUi((s) => s.openSettings);
+  const close = useUi((s) => s.closeSettings);
+  const settings = useSettings((s) => s.settings);
+  const update = useSettings((s) => s.update);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) ref.current?.focus();
+  }, [open]);
+
+  if (!open) return null;
+  const reset = (pick: (d: AppSettings) => void) => (
+    <button type="button" className="link-btn" onClick={() => update(pick)}>
+      恢复默认
+    </button>
+  );
+
+  return (
+    <div
+      className="settings-page"
+      role="dialog"
+      aria-label="设置"
+      tabIndex={-1}
+      ref={ref}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          close();
+        }
+      }}
+    >
+      <div className="settings-inner ui-zoom">
+        <nav className="set-nav" aria-label="设置分类">
+          <div className="set-nav-title">设置</div>
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`set-nav-item${section === s.id ? " on" : ""}`}
+              aria-current={section === s.id}
+              onClick={() => openSection(s.id)}
+            >
+              <Icon name={s.icon} />
+              {s.label}
+            </button>
+          ))}
+          <div className="set-nav-foot">改动会立即生效，并自动保存。</div>
+        </nav>
+        <div className="set-body">
+          <header className="set-head">
+            <h2>{SECTIONS.find((s) => s.id === section)?.label}</h2>
+            <button type="button" className="icon-btn" aria-label="关闭设置 (Esc)" title="关闭 (Esc)" onClick={close}>
+              <Icon name="close" />
+            </button>
+          </header>
+          {section === "appearance" && <Appearance s={settings} update={update} backend={backend} systemDark={systemDark} reset={reset} />}
+          {section === "font" && <FontAndZoom s={settings} update={update} reset={reset} />}
+          {section === "terminal" && <TerminalSection s={settings} update={update} reset={reset} />}
+          {section === "tabs" && <TabsSection s={settings} update={update} reset={reset} />}
+          {section === "shell" && <ShellSection s={settings} update={update} backend={backend} />}
+          {section === "keys" && <KeysSection />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type Reset = (pick: (d: AppSettings) => void) => React.ReactNode;
+
+// ---- 外观 ----
+
+function ThemeCard({ t, active, onPick }: { t: Theme; active: boolean; onPick(): void }) {
+  const c = t.terminal;
+  return (
+    <button type="button" className={`theme-card${active ? " on" : ""}`} onClick={onPick} aria-pressed={active}>
+      <span className="theme-preview" style={{ background: c.background, borderColor: t.ui.border }}>
+        <span className="tp-bar" style={{ background: t.ui.surface1 }} />
+        <span className="tp-line" style={{ color: c.foreground }}>
+          <span style={{ color: c.blue }}>~/mooncli</span> <span style={{ color: c.magenta }}>main</span> ❯ ls
+        </span>
+        <span className="tp-dots">
+          {[c.red, c.yellow, c.green, c.cyan, c.blue, c.magenta].map((x) => (
+            <i key={x} style={{ background: x }} />
+          ))}
+        </span>
+        <span className="tp-accent" style={{ background: t.ui.accent }} />
+      </span>
+      <span className="theme-name">
+        {active && <Icon name="check" size={14} />}
+        {t.displayName}
+      </span>
+    </button>
+  );
+}
+
+function Appearance({ s, update, backend, systemDark, reset }: { s: AppSettings; update: Update; backend: Backend; systemDark: boolean; reset: Reset }) {
+  const current = pickTheme(s.theme, systemDark);
+  const follow = typeof s.theme !== "string" && s.theme.follow === "system";
+  const theme = builtinThemes.find((t) => t.name === current) ?? builtinThemes[0];
+  const darkThemes = builtinThemes.filter((t) => t.kind === "dark");
+  return (
+    <>
+      <Group title="主题" action={reset((d) => (d.theme = DEFAULTS.theme))}>
+        <div className="theme-grid">
+          {builtinThemes.map((t) => (
+            <ThemeCard key={t.name} t={t} active={t.name === current} onPick={() => update((d) => (d.theme = chooseTheme(d.theme, t.name, t.kind)))} />
+          ))}
+        </div>
+        <Row label="跟随系统深浅色" desc="Windows 切到深色模式时，自动换成夜间主题">
+          <Toggle
+            label="跟随系统深浅色"
+            value={follow}
+            onChange={(v) =>
+              update((d) => {
+                const pair = typeof d.theme === "string" ? { light: builtinThemes.find((t) => t.name === d.theme)?.kind === "light" ? d.theme : "moon-paper", dark: "night-voyage" } : d.theme;
+                d.theme = { light: pair.light, dark: pair.dark, follow: v ? "system" : "off" };
+              })
+            }
+          />
+        </Row>
+        {follow && typeof s.theme !== "string" && (
+          <Row label="夜间主题">
+            <Select
+              label="夜间主题"
+              value={s.theme.dark}
+              options={darkThemes.map((t) => ({ value: t.name, label: t.displayName }))}
+              onChange={(v) => update((d) => typeof d.theme !== "string" && (d.theme.dark = v))}
+            />
+          </Row>
+        )}
+      </Group>
+      <BackgroundGroup s={s} update={update} backend={backend} theme={theme} reset={reset} />
+    </>
+  );
+}
+
+const POSITIONS = [
+  ["top left", "左上"],
+  ["top", "上"],
+  ["top right", "右上"],
+  ["left", "左"],
+  ["center", "中"],
+  ["right", "右"],
+  ["bottom left", "左下"],
+  ["bottom", "下"],
+  ["bottom right", "右下"],
+] as const;
+
+function BackgroundGroup({ s, update, backend, theme, reset }: { s: AppSettings; update: Update; backend: Backend; theme: Theme; reset: Reset }) {
+  const [mine, setMine] = useState<{ name: string; url: string }[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const builtinThumbs = useMemo(() => BUILTIN_BACKGROUNDS.map((b) => ({ ...b, url: renderBuiltin(b.id, theme, 320, 200) })), [theme]);
+
+  const refresh = () =>
+    backend
+      .backgroundList()
+      .then((names) => Promise.all(names.map((n) => backend.backgroundLoad(n).then((url) => ({ name: n, url })))))
+      .then(setMine)
+      .catch(() => setMine([]));
+  useEffect(() => {
+    refresh();
+  }, [backend]);
+
+  const onFile = async (f: File | undefined) => {
+    if (!f) return;
+    setError(null);
+    try {
+      const b64 = bytesToBase64(new Uint8Array(await f.arrayBuffer()));
+      const name = await backend.backgroundSave(f.name, b64);
+      await refresh();
+      update((d) => (d.background.image = name));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const bg = s.background;
+  const pick = (image: string | null) => update((d) => (d.background.image = image));
+  return (
+    <Group title="背景图" action={reset((d) => (d.background = { ...DEFAULTS.background }))}>
+      <div className="bg-grid">
+        <button type="button" className={`bg-card none${bg.image === null ? " on" : ""}`} onClick={() => pick(null)}>
+          <span className="bg-thumb" />
+          <span>不用背景图</span>
+        </button>
+        {builtinThumbs.map((b) => (
+          <button key={b.id} type="button" className={`bg-card${bg.image === b.id ? " on" : ""}`} onClick={() => pick(b.id)}>
+            <span className="bg-thumb" style={{ backgroundImage: `url(${b.url})` }} />
+            <span>{b.name}</span>
+          </button>
+        ))}
+        {mine.map((m) => (
+          <div key={m.name} className={`bg-card mine${bg.image === m.name ? " on" : ""}`}>
+            <button type="button" className="bg-pick" onClick={() => pick(m.name)} title={m.name}>
+              <span className="bg-thumb" style={{ backgroundImage: `url(${m.url})` }} />
+              <span className="bg-name">{m.name}</span>
+            </button>
+            <button
+              type="button"
+              className="bg-del"
+              aria-label={`删除 ${m.name}`}
+              title="删除这张图"
+              onClick={async () => {
+                await backend.backgroundDelete(m.name).catch(() => {});
+                if (bg.image === m.name) pick(null);
+                refresh();
+              }}
+            >
+              <Icon name="trash" size={13} />
+            </button>
+          </div>
+        ))}
+        <button type="button" className="bg-card add" onClick={() => fileInput.current?.click()}>
+          <span className="bg-thumb">
+            <Icon name="plus" size={20} />
+          </span>
+          <span>添加图片</span>
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+          hidden
+          onChange={(e) => {
+            onFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {error && <div className="set-error">{error}</div>}
+      {bg.image !== null && (
+        <>
+          <Row label="图片不透明度">
+            <Slider label="图片不透明度" value={bg.opacity} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.opacity = v))} />
+          </Row>
+          <Row label="文字保护" desc="在图片上盖一层和底色相同的半透明层，让文字更清楚">
+            <Slider label="文字保护" value={bg.overlay} min={0} max={0.95} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.overlay = v))} />
+          </Row>
+          <Row label="模糊">
+            <Slider label="模糊" value={bg.blur} min={0} max={30} step={1} format={(v) => `${v}px`} onChange={(v) => update((d) => (d.background.blur = v))} />
+          </Row>
+          <Row label="亮度">
+            <Slider label="亮度" value={bg.brightness} min={0.5} max={1.5} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.brightness = v))} />
+          </Row>
+          <Row label="饱和度">
+            <Slider label="饱和度" value={bg.saturation} min={0} max={1.5} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.saturation = v))} />
+          </Row>
+          <Row label="填充方式">
+            <Segmented
+              label="填充方式"
+              value={bg.fit}
+              options={[
+                { value: "cover", label: "铺满" },
+                { value: "contain", label: "完整显示" },
+                { value: "tile", label: "平铺" },
+                { value: "center", label: "居中" },
+              ]}
+              onChange={(v) => update((d) => (d.background.fit = v))}
+            />
+          </Row>
+          <Row label="对齐位置" desc={isBuiltin(bg.image) ? "内置图的主体在右下角" : undefined}>
+            <div className="pos-grid" role="radiogroup" aria-label="对齐位置">
+              {POSITIONS.map(([v, l]) => (
+                <button key={v} type="button" role="radio" aria-checked={bg.position === v} aria-label={l} title={l} className={bg.position === v ? "on" : ""} onClick={() => update((d) => (d.background.position = v))}>
+                  <i />
+                </button>
+              ))}
+            </div>
+          </Row>
+        </>
+      )}
+    </Group>
+  );
+}
+
+// ---- 字体与缩放 ----
+
+const FONT_PRESETS = [
+  ["Cascadia Code", "Windows 自带"],
+  ["JetBrains Mono", "需安装"],
+  ["Maple Mono NF CN", "中英等宽，需安装"],
+  ["Sarasa Mono SC", "中英等宽，需安装"],
+  ["Consolas", "Windows 自带"],
+] as const;
+
+/** 把字体回退链的第一个换成选中的字体，后面的符号、中文、emoji 字体保留 */
+export function withPrimaryFont(family: string, primary: string): string {
+  const rest = family
+    .split(",")
+    .map((f) => f.trim())
+    .filter((f) => f && !FONT_PRESETS.some(([p]) => f.replace(/"/g, "") === p));
+  return [`"${primary}"`, ...rest].join(", ");
+}
+
+const SAMPLE = [
+  "PS ~/mooncli> git status  // 0O 1lI {}[] => != >=",
+  "😀 🚀 ✅ ⚠️ 👍🏽 👨‍👩‍👧  ← → ↑ ↓ ➜ ❯ ⇒  ┌─┐ └─┘ ░▒▓█",
+  "       中文字体对齐：浅色优先的终端",
+];
+
+function FontAndZoom({ s, update, reset }: { s: AppSettings; update: Update; reset: Reset }) {
+  const primary = s.font.family.split(",")[0]?.replace(/"/g, "").trim();
+  return (
+    <>
+      <Group title="缩放" action={reset((d) => ((d.zoom = 1), (d.uiScale = 1), (d.font.size = DEFAULTS.font.size)))}>
+        <Row label="整体缩放" desc="界面和终端文字一起放大缩小。快捷键 Ctrl+= / Ctrl+- / Ctrl+0">
+          <div className="zoom-ctl">
+            <button type="button" className="btn" aria-label="缩小" onClick={() => update((d) => (d.zoom = zoomStep(d.zoom, -1)))}>
+              −
+            </button>
+            <span className="zoom-val">{pct(s.zoom)}</span>
+            <button type="button" className="btn" aria-label="放大" onClick={() => update((d) => (d.zoom = zoomStep(d.zoom, 1)))}>
+              +
+            </button>
+            <button type="button" className="link-btn" disabled={s.zoom === 1} onClick={() => update((d) => (d.zoom = 1))}>
+              重置
+            </button>
+          </div>
+        </Row>
+        <Row label="界面尺寸" desc="只放大标题栏、标签栏、状态栏和各种面板，终端文字不变">
+          <Slider label="界面尺寸" value={s.uiScale} min={LIMITS.uiScale.min} max={LIMITS.uiScale.max} step={0.05} format={pct} onChange={(v) => update((d) => (d.uiScale = v))} />
+        </Row>
+        <Row label="终端字号" desc={`只调终端里的文字，界面不变。在终端里按住 Ctrl 滚动滚轮也可以调${s.zoom !== 1 ? `（乘上整体缩放后实际是 ${effectiveFontSize(s)}px）` : ""}`}>
+          <Slider label="终端字号" value={s.font.size} min={LIMITS.fontSize.min} max={LIMITS.fontSize.max} step={0.5} format={(v) => `${v}px`} onChange={(v) => update((d) => (d.font.size = v))} />
+        </Row>
+      </Group>
+      <Group title="终端字体" action={reset((d) => (d.font = { ...DEFAULTS.font, size: d.font.size }))}>
+        <Row label="字体" desc="选一个常用字体，或者在下面直接填写" wide>
+          <div className="chips">
+            {FONT_PRESETS.map(([f, note]) => (
+              <button key={f} type="button" className={`chip${primary === f ? " on" : ""}`} title={note} onClick={() => update((d) => (d.font.family = withPrimaryFont(d.font.family, f)))}>
+                <span style={{ fontFamily: `"${f}", monospace` }}>{f}</span>
+              </button>
+            ))}
+          </div>
+        </Row>
+        <Row label="字体回退链" desc="按顺序找字：英文 → 图标 → 中文 → emoji → 符号。用逗号分隔" wide>
+          <TextInput label="字体回退链" mono value={s.font.family} onCommit={(v) => update((d) => (d.font.family = v.trim() || DEFAULTS.font.family))} />
+        </Row>
+        <Row label="行高">
+          <Slider label="行高" value={s.font.lineHeight} min={LIMITS.lineHeight.min} max={LIMITS.lineHeight.max} step={0.05} format={(v) => v.toFixed(2)} onChange={(v) => update((d) => (d.font.lineHeight = v))} />
+        </Row>
+        <Row label="字重">
+          <Segmented
+            label="字重"
+            value={s.font.weight}
+            options={[
+              { value: "300", label: "细" },
+              { value: "normal", label: "常规" },
+              { value: "500", label: "中等" },
+              { value: "600", label: "半粗" },
+            ]}
+            onChange={(v) => update((d) => (d.font.weight = v))}
+          />
+        </Row>
+        <div className="font-preview" style={{ fontFamily: s.font.family, fontSize: effectiveFontSize(s), lineHeight: s.font.lineHeight, fontWeight: s.font.weight }}>
+          {SAMPLE.map((l) => (
+            <div key={l}>{l}</div>
+          ))}
+        </div>
+      </Group>
+    </>
+  );
+}
+
+// ---- 终端 ----
+
+function TerminalSection({ s, update, reset }: { s: AppSettings; update: Update; reset: Reset }) {
+  const t = s.terminal;
+  const set = <K extends keyof AppSettings["terminal"]>(k: K) => (v: AppSettings["terminal"][K]) => update((d) => (d.terminal[k] = v));
+  return (
+    <>
+      <Group title="光标与滚动" action={reset((d) => Object.assign(d.terminal, { cursorStyle: DEFAULTS.terminal.cursorStyle, cursorBlink: DEFAULTS.terminal.cursorBlink, scrollback: DEFAULTS.terminal.scrollback, smoothScrollMs: DEFAULTS.terminal.smoothScrollMs, minimumContrastRatio: DEFAULTS.terminal.minimumContrastRatio }))}>
+        <Row label="光标样式">
+          <Segmented label="光标样式" value={t.cursorStyle} options={[{ value: "bar", label: "竖线" }, { value: "block", label: "方块" }, { value: "underline", label: "下划线" }]} onChange={set("cursorStyle")} />
+        </Row>
+        <Row label="光标闪烁">
+          <Toggle label="光标闪烁" value={t.cursorBlink} onChange={set("cursorBlink")} />
+        </Row>
+        <Row label="回滚行数" desc="往上能翻多少行。行数越多越占内存">
+          <Select label="回滚行数" value={t.scrollback} options={[1000, 5000, 10000, 50000, 100000].map((n) => ({ value: n, label: `${n.toLocaleString()} 行` }))} onChange={set("scrollback")} />
+        </Row>
+        <Row label="平滑滚动" desc="鼠标滚轮滚动时带一点缓动">
+          <Toggle label="平滑滚动" value={t.smoothScrollMs > 0} onChange={(v) => set("smoothScrollMs")(v ? 120 : 0)} />
+        </Row>
+        <Row label="自动加深浅色文字" desc="程序输出了在当前背景上看不清的颜色时，自动加深到这个对比度。1 表示不处理">
+          <Slider label="最低对比度" value={t.minimumContrastRatio} min={1} max={7} step={0.5} format={(v) => (v <= 1 ? "关闭" : `${v}:1`)} onChange={set("minimumContrastRatio")} />
+        </Row>
+      </Group>
+      <Group title="复制与粘贴" action={reset((d) => Object.assign(d.terminal, { rightClick: DEFAULTS.terminal.rightClick, copyOnSelect: DEFAULTS.terminal.copyOnSelect, copyToast: DEFAULTS.terminal.copyToast, confirmMultilinePaste: DEFAULTS.terminal.confirmMultilinePaste, trimTrailingWhitespace: DEFAULTS.terminal.trimTrailingWhitespace }))}>
+        <Row label="右键" desc="按住 Shift 右键总是弹出菜单">
+          <Segmented label="右键" value={t.rightClick} options={[{ value: "copyPaste", label: "复制 / 粘贴" }, { value: "menu", label: "弹出菜单" }]} onChange={set("rightClick")} />
+        </Row>
+        <Row label="选中即复制">
+          <Toggle label="选中即复制" value={t.copyOnSelect} onChange={set("copyOnSelect")} />
+        </Row>
+        <Row label="复制提醒" desc="复制后在鼠标旁边弹出一张小卡片">
+          <Toggle label="复制提醒" value={t.copyToast} onChange={set("copyToast")} />
+        </Row>
+        <Row label="多行粘贴前确认" desc="程序没开括号粘贴时，多行内容可能被逐行执行">
+          <Toggle label="多行粘贴前确认" value={t.confirmMultilinePaste} onChange={set("confirmMultilinePaste")} />
+        </Row>
+        <Row label="复制时去掉行尾空格">
+          <Toggle label="复制时去掉行尾空格" value={t.trimTrailingWhitespace} onChange={set("trimTrailingWhitespace")} />
+        </Row>
+      </Group>
+    </>
+  );
+}
+
+// ---- 标签栏 ----
+
+function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; reset: Reset }) {
+  return (
+    <Group title="标签栏" action={reset((d) => (d.tabs = structuredClone(DEFAULTS.tabs)))}>
+      <Row label="位置">
+        <Segmented label="标签栏位置" value={s.tabs.position} options={[{ value: "left", label: "左侧" }, { value: "top", label: "顶部" }]} onChange={(v) => update((d) => (d.tabs.position = v))} />
+      </Row>
+      <Row label="侧栏宽度" desc="也可以直接拖动侧栏右边缘；拖到很窄会收起，双击边缘切换">
+        <Slider
+          label="侧栏宽度"
+          value={s.tabs.sidebar.width <= SIDEBAR.collapsed ? SIDEBAR.collapsed : s.tabs.sidebar.width}
+          min={SIDEBAR.collapsed}
+          max={SIDEBAR.max}
+          step={4}
+          format={(v) => (v <= SIDEBAR.collapsed ? "收起" : `${v}px`)}
+          onChange={(v) => update((d) => (d.tabs.sidebar.width = v < SIDEBAR.min ? (v < SIDEBAR.snapBelow ? SIDEBAR.collapsed : SIDEBAR.min) : v))}
+        />
+      </Row>
+      <Row label="窗口变窄时自动收起侧栏" desc="窗口宽度不够时先收起侧栏，保证终端至少 80 列">
+        <Toggle label="自动收起侧栏" value={s.tabs.sidebar.autoCollapse} onChange={(v) => update((d) => (d.tabs.sidebar.autoCollapse = v))} />
+      </Row>
+    </Group>
+  );
+}
+
+// ---- Shell 与诊断 ----
+
+function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; backend: Backend }) {
+  const [diag, setDiag] = useState<Diagnostics | null>(null);
+  const tab = useStore((st) => st.tabs.find((t) => t.id === st.activeId));
+  useEffect(() => {
+    backend.diagnostics().then(setDiag).catch(() => setDiag(null));
+  }, [backend, s.shell]);
+  const integrated = tab && tab.shellState !== "unknown";
+  const lines = diag
+    ? [
+        ["mooncli 版本", diag.appVersion],
+        ["系统", diag.os],
+        ["PowerShell", diag.shellPath ?? "没有找到"],
+        ["shell 集成", diag.integrationEnabled ? "已开启" : "已关闭"],
+        ["当前标签页", integrated ? "已集成" : "未集成"],
+        ["ConPTY", diag.bundledConpty ? "使用附带的新版" : "使用系统自带"],
+        ["设置文件", diag.settingsPath],
+        ["历史库", `${diag.historyPath}${diag.historyCount !== null ? `（${diag.historyCount} 条）` : ""}`],
+        ["背景图目录", diag.backgroundsDir],
+      ]
+    : [];
+  const [copied, setCopied] = useState(false);
+  return (
+    <>
+      <Group title="PowerShell">
+        <Row label="pwsh 路径" desc="留空时自动查找（PATH、Program Files、Microsoft Store 版）" wide>
+          <TextInput label="pwsh 路径" mono value={s.shell.path ?? ""} placeholder="自动查找" onCommit={(v) => update((d) => (d.shell.path = v.trim() || null))} />
+        </Row>
+        <Row label="启动参数" desc="比如 -NoProfile。用空格分隔，新开的标签页生效" wide>
+          <TextInput label="启动参数" mono value={s.shell.args.join(" ")} placeholder="（无）" onCommit={(v) => update((d) => (d.shell.args = v.split(/\s+/).filter(Boolean)))} />
+        </Row>
+        <Row label="shell 集成" desc="让 mooncli 知道提示符、命令、目录和退出码。关掉后终端照常可用，但没有智能功能。新开的标签页生效">
+          <Toggle label="shell 集成" value={s.shell.integration} onChange={(v) => update((d) => (d.shell.integration = v))} />
+        </Row>
+      </Group>
+      <Group
+        title="诊断"
+        action={
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              backend.clipboardWrite(lines.map(([k, v]) => `${k}: ${v}`).join("\n")).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+          >
+            {copied ? "已复制" : "复制诊断信息"}
+          </button>
+        }
+      >
+        {!integrated && tab && (
+          <div className="set-hint">
+            当前标签页没有收到 shell 集成的信号。可能的原因：shell 集成被关闭；启动参数里加了会跳过集成的选项；pwsh 版本太旧（需要 7.2 以上）。新开一个标签页看看，提示符上方如果出现黄色的"shell 集成没有加载成功"，把那句话发给开发者。
+          </div>
+        )}
+        <dl className="diag">
+          {lines.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </Group>
+    </>
+  );
+}
+
+// ---- 快捷键 ----
+
+const KEYS: [string, string][] = [
+  ["新标签页", "Ctrl+Shift+T"],
+  ["关闭标签页", "Ctrl+Shift+W"],
+  ["下一个 / 上一个标签页", "Ctrl+Tab / Ctrl+Shift+Tab"],
+  ["跳到第 N 个标签页", "Alt+1 … Alt+9"],
+  ["命令面板", "Ctrl+Shift+P"],
+  ["设置", "Ctrl+,"],
+  ["收起 / 展开标签栏", "Ctrl+Shift+B"],
+  ["放大 / 缩小 / 重置整体缩放", "Ctrl+= / Ctrl+- / Ctrl+0"],
+  ["调终端字号", "Ctrl+滚轮"],
+  ["复制（有选中时）", "Ctrl+C"],
+  ["总是复制", "Ctrl+Shift+C"],
+  ["粘贴", "Ctrl+V / Shift+Insert"],
+  ["右键菜单", "Shift+右键"],
+];
+
+function KeysSection() {
+  return (
+    <Group title="快捷键">
+      <div className="set-hint">这些快捷键在任何时候都由 mooncli 处理；其它按键都原样交给 shell，所以 TAB、Ctrl+R 等在 ssh、vim 里照常可用。自定义快捷键会在后续版本加入。</div>
+      <dl className="keys">
+        {KEYS.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>
+              <kbd>{v}</kbd>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </Group>
+  );
+}
+

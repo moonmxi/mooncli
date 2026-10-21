@@ -52,6 +52,8 @@ export function cssVariables(t: Theme): Record<string, string> {
   for (const [k, v] of Object.entries(t.ui)) vars[`--${k}`] = v;
   for (const [k, v] of Object.entries(components(t))) vars[`--c-${k.replace(/\./g, "-")}`] = v;
   vars["--term-bg"] = t.terminal.background;
+  // 标签颜色等界面元素用到的 ANSI 色
+  for (const c of ["red", "yellow", "green", "cyan", "blue", "magenta"]) vars[`--ansi-${c}`] = t.terminal[c];
   vars["--term-fg"] = t.terminal.foreground;
   return vars;
 }

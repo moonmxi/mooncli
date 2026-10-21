@@ -1,6 +1,6 @@
 # MoonCli.ps1 —— mooncli 的 pwsh 集成脚本
 #
-# mooncli 启动 pwsh 时用 -NoExit -Command ". 'MoonCli.ps1'" 加载本脚本，
+# 本脚本编进 mooncli 程序里，启动 pwsh 时通过 -EncodedCommand 作为动态模块加载，
 # 在用户 profile 之后运行。作用是在输出里夹带一些看不见的标记，告诉终端：
 #   提示符从哪开始、命令什么时候开始和结束、退出码是多少、当前目录在哪。
 # 协议说明见 docs/02-terminal-core.md 第 4 节。
@@ -123,3 +123,7 @@ try {
         psreadline = [bool](Get-Command PSConsoleHostReadLine -ErrorAction SilentlyContinue)
     }))
 } catch { }
+
+# 本脚本作为动态模块加载（见 crates/mooncli-pty/src/shell.rs 的 integration_bootstrap）。
+# 只有上面显式写了 global: 的 prompt、PSConsoleHostReadLine 会出现在用户会话里，辅助函数和变量都不导出。
+Export-ModuleMember -Function @() -Variable @()

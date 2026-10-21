@@ -4,14 +4,15 @@
 //! 我们把附带的 conpty.dll 和 OpenConsole.exe 放在资源目录的 conpty/ 子目录里，
 //! 启动时用 SetDllDirectoryW 把这个目录加进搜索路径；设置里关掉"使用附带的 ConPTY"时不加，就会退回系统版本。
 
+/// 返回是否用上了附带的版本。
 #[cfg(windows)]
-pub fn prefer_bundled(app: &tauri::AppHandle) {
+pub fn prefer_bundled(app: &tauri::AppHandle) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use tauri::Manager;
 
-    let Ok(dir) = app.path().resolve("conpty", tauri::path::BaseDirectory::Resource) else { return };
+    let Ok(dir) = app.path().resolve("conpty", tauri::path::BaseDirectory::Resource) else { return false };
     if !dir.join("conpty.dll").is_file() {
-        return;
+        return false;
     }
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     // SAFETY: 传入以 0 结尾的 UTF-16 路径，函数只读取它
@@ -19,7 +20,10 @@ pub fn prefer_bundled(app: &tauri::AppHandle) {
     if ok == 0 {
         eprintln!("mooncli: 设置 ConPTY 目录失败，使用系统自带的 ConPTY");
     }
+    ok != 0
 }
 
 #[cfg(not(windows))]
-pub fn prefer_bundled(_app: &tauri::AppHandle) {}
+pub fn prefer_bundled(_app: &tauri::AppHandle) -> bool {
+    false
+}

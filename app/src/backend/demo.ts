@@ -15,6 +15,16 @@ interface Fake {
   timers: number[];
 }
 
+/** 检查字符显示：emoji、箭头、方框线、Nerd Font 图标、中文 */
+export const GLYPHS = [
+  "emoji      😀 🎉 🚀 ✅ ❌ ⚠️ 🔥 👍🏽 👨‍👩‍👧 🇨🇳 ❤️",
+  "箭头       ← ↑ → ↓ ↔ ⇒ ➜ ❯ ➤ ▶ ◀ ⟶ ↳",
+  "方框线     ┌─┬─┐ │ ├─┼─┤ └─┴─┘ ╭─╮ ╰─╯ ━ ┃ ░▒▓█",
+  "提示符图标 \ue0b0 \ue0b2 \ue0b4 \ue0b6  \ue725  \uf113  \ue718  \ue7a8  \uf07b  \uf489  \uf0e7",
+  "盲文/点阵  ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏  ✳ ✻ ● ◐ ◓",
+  "中英混排   mooncli 是一个浅色优先的终端，支持 CJK 宽字符对齐。",
+].join("\n");
+
 const FILES: Record<string, string[]> = {
   "C:\\Users\\moon\\code\\mooncli": ["app", "crates", "design", "docs", "shell", "Cargo.toml", "README.md"],
   "C:\\Users\\moon\\code\\mooncli\\docs": ["00-vision.md", "01-architecture.md", "08-art-direction.md", "09-roadmap.md"],
@@ -37,14 +47,18 @@ function finish(f: Fake, text: string, code: number) {
   prompt(f);
 }
 
+/** 演示用的历史：浏览器里敲过的命令，加几条示例 */
+const demoHistory: string[] = ["git status", "git push origin main", "cargo test -p mooncli-history", "pnpm tauri dev", "ssh box"];
+
 function run(f: Fake, text: string) {
+  if (text.trim()) demoHistory.unshift(text.trim());
   const [cmd, ...args] = text.trim().split(/\s+/);
   f.emit({ type: "commandStarted", text });
   f.emit({ type: "state", state: "running" });
   const nl = "\r\n";
   switch (cmd?.toLowerCase()) {
     case "help":
-      out(f, `演示后端支持：${c("1", "ls  cd <目录>  git status  colors  fail  sleep  claude  ssh box  clear  help")}${nl}`);
+      out(f, `演示后端支持：${c("1", "ls  cd <目录>  git status  colors  glyphs  fail  sleep  claude  ssh box  clear  help")}${nl}`);
       out(f, `这是浏览器里的模拟 shell，在 Tauri 窗口里运行时会换成真正的 pwsh。${nl}`);
       return finish(f, text, 0);
     case "ls":
@@ -76,6 +90,9 @@ function run(f: Fake, text: string) {
       out(f, names.map((n, i) => c(`${90 + i}`, ("b" + n).padEnd(8))).join("") + nl);
       return finish(f, text, 0);
     }
+    case "glyphs":
+      out(f, GLYPHS.replace(/\n/g, nl) + nl);
+      return finish(f, text, 0);
     case "fail":
       out(f, c("31", "fail: 这是一条故意失败的命令。") + nl);
       return finish(f, text, 1);
@@ -169,10 +186,61 @@ function input(f: Fake, data: string) {
   }
 }
 
+const SETTINGS_KEY = "mooncli.demo.settings";
+
 export function demoBackend(): Backend {
   const sessions = new Map<string, Fake>();
+  const backgrounds = new Map<string, string>();
   return {
     kind: "demo",
+    async loadSettings() {
+      try {
+        return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
+      } catch {
+        return {};
+      }
+    },
+    async saveSettings(v) {
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(v));
+      } catch {
+        // 浏览器不让存就算了
+      }
+    },
+    clipboardRead: () => navigator.clipboard.readText().catch(() => ""),
+    clipboardWrite: (t) => navigator.clipboard.writeText(t).catch(() => {}),
+    async backgroundSave(fileName, data) {
+      const ext = fileName.split(".").pop()?.toLowerCase() ?? "png";
+      backgrounds.set(fileName, `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${data}`);
+      return fileName;
+    },
+    async backgroundLoad(name) {
+      const d = backgrounds.get(name);
+      if (!d) throw new Error(`找不到背景图 ${name}`);
+      return d;
+    },
+    backgroundList: async () => [...backgrounds.keys()],
+    backgroundDelete: async (name) => void backgrounds.delete(name),
+    diagnostics: async () => ({
+      appVersion: "0.1.0（演示）",
+      os: "browser",
+      shellPath: null,
+      shellKind: "演示后端",
+      integrationEnabled: true,
+      bundledConpty: false,
+      settingsPath: "浏览器 localStorage",
+      historyPath: "内存",
+      historyCount: demoHistory.length,
+      backgroundsDir: "内存",
+    }),
+    async historySearch(text, opts) {
+      const q = text.toLowerCase();
+      const seen = new Set<string>();
+      return demoHistory
+        .filter((t) => (seen.has(t) ? false : (seen.add(t), t.toLowerCase().includes(q))))
+        .slice(0, opts?.limit ?? 50)
+        .map((t, i) => ({ id: i, text: t, count: 1, lastUsed: Date.now(), lastCwd: null, lastExit: 0, matched: [] }));
+    },
     async create(opts: CreateOptions, onMsg) {
       const f: Fake = { emit: onMsg, line: "", cwd: "C:\\Users\\moon\\code\\mooncli", mode: "prompt", timers: [] };
       sessions.set(opts.id, f);

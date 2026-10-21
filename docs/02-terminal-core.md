@@ -51,16 +51,31 @@ ConPTY 输出 ──读线程──► 缓冲区 ──每 4ms 或满 64KB──
 
 找 pwsh 的顺序：设置里指定的路径 → `PATH` 里的 `pwsh.exe` → 常见安装位置（`%ProgramFiles%\PowerShell\7\`、Microsoft Store 版、`winget` 安装位置）。都找不到时，引导用户安装 PowerShell 7，并允许临时用 Windows PowerShell 5.1。
 
-启动命令（参考 VS Code 的做法）：
+启动命令：
 
 ```text
-pwsh.exe -NoLogo -NoExit -Command "try { . '<mooncli>\shell\pwsh\MoonCli.ps1' } catch {}"
+pwsh.exe -NoLogo -NoExit -EncodedCommand <base64>
 ```
 
-- 用户的 `$PROFILE` 照常先加载，所以 oh-my-posh、starship 这些提示符美化都还在。
-- 集成脚本在 profile **之后**运行，包住用户已经设置好的 prompt。
-- `try/catch` 保证集成脚本出错也不影响正常使用（原则 5：出问题能退回去）。
+`<base64>` 解码后是：
+
+```powershell
+try { $null = New-Module -Name MoonCli -ScriptBlock { <MoonCli.ps1 的全文> } }
+catch { Write-Host "mooncli: shell 集成没有加载成功（原因）。终端照常可用，只是没有智能功能。" -ForegroundColor DarkYellow }
+```
+
+- 集成脚本**编进程序里**（`crates/mooncli-pty/src/shell.rs` 的 `INTEGRATION_SCRIPT`），不依赖安装目录里的文件。
+- 用户的 `$PROFILE` 照常先加载，所以 oh-my-posh、starship 这些提示符美化都还在；集成脚本在 profile **之后**运行，包住用户已经设置好的 prompt。
+- 加载失败时打印一行黄色提示，终端照常可用（原则 5：出问题能退回去）。
 - 设置里可以关掉 shell 集成；关掉后智能功能降级，终端照常可用。
+
+**为什么不用 `-Command ". 'MoonCli.ps1'"` 点加载脚本文件**：第一版这么做，结果在 Windows 真机上显示"未集成"。点加载有三个隐患：
+
+1. 脚本文件受用户的执行策略限制，有些机器上会被直接拦下；字符串形式的脚本块不受这个限制。
+2. 安装目录的路径在 Windows 上可能带 `\\?\` 前缀、空格、引号，拼进命令行容易出错。
+3. 外面那层 `try/catch {}` 把错误吞掉了，用户和我们都看不到原因。
+
+另外，脚本放进**动态模块**里运行，内部的变量和辅助函数（`$Nonce`、`Osc` 等）不会漏进用户的全局作用域。集成测试里专门检查了这一点。
 
 ## 4. Shell 集成协议
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useStore } from "./store";
+import { orderedTabs, useStore } from "./store";
 
 const s = () => useStore.getState();
 
@@ -67,10 +67,28 @@ describe("标签页状态", () => {
     expect(s().tabs[0].remote).toBeUndefined();
   });
 
-  it("记住侧栏宽度和上次展开宽度", () => {
-    s().setSidebarWidth(280);
-    s().setSidebarWidth(52);
-    expect(s().sidebarWidth).toBe(52);
+  it("记住上次展开宽度，收起状态不覆盖它", () => {
+    s().rememberOpenWidth(280);
+    s().rememberOpenWidth(52);
     expect(s().lastOpenWidth).toBe(280);
+  });
+
+  it("置顶的标签排在前面，切换顺序跟着显示顺序走", () => {
+    s().addTab("a");
+    s().addTab("b");
+    s().addTab("c");
+    s().togglePin("c");
+    expect(orderedTabs(s().tabs).map((t) => t.id)).toEqual(["c", "a", "b"]);
+    s().activateIndex(0);
+    expect(s().activeId).toBe("c");
+    s().cycle(1);
+    expect(s().activeId).toBe("a");
+    s().closeTab("a");
+    expect(s().activeId).toBe("b");
+  });
+
+  it("复制标签页带上起始目录", () => {
+    s().addTab("a", { cwd: "C:/code" });
+    expect(s().tabs[0]).toMatchObject({ initialCwd: "C:/code", cwd: "C:/code" });
   });
 });
