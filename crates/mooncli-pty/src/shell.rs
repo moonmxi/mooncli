@@ -81,6 +81,8 @@ pub struct LaunchRequest<'a> {
     pub extra_args: &'a [String],
     /// 是否加载 shell 集成（脚本已编进程序，见 [`INTEGRATION_SCRIPT`]）
     pub integration: bool,
+    /// 让 PSReadLine 的配色跟随主题（集成脚本里只替换仍是默认值的颜色）
+    pub adapt_colors: bool,
     pub session_id: &'a str,
     pub cwd: Option<String>,
     pub cols: u16,
@@ -138,6 +140,9 @@ pub fn launch(req: LaunchRequest) -> SpawnOptions {
     }
     if let Some(n) = &nonce {
         env.push(("MOONCLI_NONCE".into(), n.clone()));
+    }
+    if integrate && req.adapt_colors {
+        env.push(("MOONCLI_ADAPT_COLORS".into(), "1".into()));
     }
     SpawnOptions {
         program: req.shell.program.display().to_string(),
@@ -199,6 +204,7 @@ mod tests {
             shell: &shell,
             extra_args: &[],
             integration: true,
+            adapt_colors: true,
             session_id: "tab-1",
             cwd: None,
             cols: 120,
@@ -221,6 +227,7 @@ mod tests {
             shell: &shell,
             extra_args: &[],
             integration: true,
+            adapt_colors: true,
             session_id: "t",
             cwd: None,
             cols: 80,

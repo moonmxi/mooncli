@@ -23,5 +23,3 @@ mooncli-config.workspace = true
 mooncli-pty.workspace = true
 arboard = { version = "3", default-features = false }
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_LibraryLoader"] }

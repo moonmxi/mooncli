@@ -53,10 +53,12 @@ jobs:
       - run: pnpm build
       - run: python3 ../tools/check_contrast.py
 
-  # 真正的目标平台：编译、跑测试（ConPTY 下的 pwsh 集成测试）、打安装包
+  # 真正的目标平台：编译、跑测试（ConPTY 下的 pwsh 集成测试）、打安装包、发布
   windows:
     name: Windows 构建与安装包
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -71,12 +73,55 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: app
-      - run: cargo test
+      - name: 下载附带的新版 ConPTY
+        run: python tools/fetch_conpty.py
+      - name: 测试（系统自带的 ConPTY）
+        run: cargo test
+      - name: 集成测试（附带的新版 ConPTY）
+        run: cargo test -p mooncli-pty --test pwsh_integration -- --nocapture
+        env:
+          MOONCLI_TEST_CONPTY_DIR: ${{ github.workspace }}\app\src-tauri\resources\conpty
+
+      # 代码签名（可选）：仓库里配置了 Azure Artifact Signing（原 Trusted Signing）的密钥时自动签名，
+      # 签过名的安装包不会再被 Windows 当成"未知发布者"拦下。没配置时照常打出未签名的安装包。
+      # 需要的仓库密钥：AZURE_CLIENT_ID、AZURE_CLIENT_SECRET、AZURE_TENANT_ID、
+      #   SIGNING_ENDPOINT（如 https://wus2.codesigning.azure.net）、SIGNING_ACCOUNT、SIGNING_PROFILE
+      - name: 准备签名工具
+        id: sign
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          SIGNING_ENDPOINT: ${{ secrets.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ secrets.SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ secrets.SIGNING_PROFILE }}
+        run: |
+          if (-not $env:AZURE_CLIENT_ID) { "config=" >> $env:GITHUB_OUTPUT; Write-Host "没有配置签名密钥，打未签名的安装包"; exit 0 }
+          cargo install trusted-signing-cli --locked
+          $cmd = "trusted-signing-cli -e $env:SIGNING_ENDPOINT -a $env:SIGNING_ACCOUNT -c $env:SIGNING_PROFILE -d mooncli %1"
+          $cfg = @{ bundle = @{ windows = @{ signCommand = $cmd } } } | ConvertTo-Json -Compress -Depth 5
+          Set-Content -Path sign.json -Value $cfg -Encoding utf8
+          "config=--config ../sign.json" >> $env:GITHUB_OUTPUT
+
       - name: 打包（NSIS 安装包）
-        run: pnpm tauri build --bundles nsis
+        run: pnpm tauri build --bundles nsis ${{ steps.sign.outputs.config }}
         working-directory: app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mooncli-windows-installer
-          path: target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+      # 直接把 .exe 发到 Release 页（Actions 的"产物"一定会被打成 zip，所以不用它）。
+      # 每次推送都更新同一个 nightly 预发布版，下载地址固定：
+      #   https://github.com/<owner>/<repo>/releases/download/nightly/mooncli-setup-x64.exe
+      - name: 发布到 nightly 预发布版
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          Copy-Item $exe.FullName mooncli-setup-x64.exe
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          gh release delete nightly --cleanup-tag --yes 2>$null
+          $notes = "自动构建：分支 ${{ github.ref_name }}，提交 $sha。`n`n下载 mooncli-setup-x64.exe 直接运行即可安装。"
+          gh release create nightly mooncli-setup-x64.exe --prerelease --target "${{ github.sha }}" --title "mooncli 每日构建（$sha）" --notes $notes

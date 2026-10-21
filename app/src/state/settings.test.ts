@@ -34,6 +34,12 @@ describe("设置合并", () => {
     });
   });
 
+  it("旧版本保存的 4.5 对比度迁移成 3，新版本保存的保留", () => {
+    expect(mergeSettings({ terminal: { minimumContrastRatio: 4.5 } }).terminal.minimumContrastRatio).toBe(3);
+    expect(mergeSettings({ version: 2, terminal: { minimumContrastRatio: 4.5 } }).terminal.minimumContrastRatio).toBe(4.5);
+    expect(mergeSettings({ terminal: { minimumContrastRatio: 5 } }).terminal.minimumContrastRatio).toBe(5);
+  });
+
   it("超出范围的值被收回", () => {
     const m = mergeSettings({ zoom: 9, uiScale: 0.1, font: { size: 2 } });
     expect([m.zoom, m.uiScale, m.font.size]).toEqual([2, 0.8, 8]);

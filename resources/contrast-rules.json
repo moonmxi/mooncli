@@ -1,0 +1,37 @@
+{
+  "$comment": "主题对比度规则（docs/08 §2）。nearAccent：和主题强调色色相相差不到 degrees 度的颜色要更深（浅色主题）或更亮（深色主题），rotate 为 true 时还会把色相转开。数值是对终端背景的 WCAG 对比度 [最小, 最大]，null 表示不限。tools/check_contrast.py、tools/tune_palette.py 和 Rust 端共用这一份。",
+  "light": {
+    "foreground": [7, null],
+    "selection": [4.5, null],
+    "cursor": [3, null],
+    "ansi": {
+      "black": [9, null],
+      "white": [6, 8.5],
+      "brightWhite": [2.2, 2.9],
+      "brightBlack": [3.0, 3.7],
+      "normal": [5.0, null],
+      "bright": [4.5, null]
+    },
+    "nearAccent": { "degrees": 25, "normal": 6.5, "bright": 6.0, "rotate": true }
+  },
+  "dark": {
+    "foreground": [9, null],
+    "selection": [4.5, null],
+    "cursor": [3, null],
+    "ansi": {
+      "black": [3.0, 3.8],
+      "brightBlack": [3.8, 4.8],
+      "white": [9, null],
+      "brightWhite": [12, null],
+      "normal": [6.0, null],
+      "bright": [7.0, null]
+    },
+    "nearAccent": { "degrees": 25, "normal": 7.5, "bright": 8.0, "rotate": false }
+  },
+  "ui": {
+    "text": 7,
+    "textMuted": 4.5,
+    "accentOnSurface1": 3,
+    "onAccent": 4.5
+  }
+}

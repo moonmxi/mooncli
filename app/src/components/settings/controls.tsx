@@ -1,5 +1,5 @@
 // 设置页用的小控件：开关、滑杆、分段按钮、下拉、文本框，以及一行设置的布局。
-import { useId, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 export function Row({ label, desc, children, wide }: { label: string; desc?: ReactNode; children: ReactNode; wide?: boolean }) {
   return (
@@ -40,39 +40,85 @@ export function Toggle({ value, onChange, label }: { value: boolean; onChange(v:
   );
 }
 
-export function Slider({
+/**
+ * 步进器：[−] 数值 [+]。点按钮按步长变化，也可以直接输入，回车或离开输入框时生效。
+ * 不用滑杆：滑杆一拖就跳很多档，字号、缩放这类设置会瞬间忽大忽小（用户反馈）。
+ */
+export function Stepper({
   value,
   min,
   max,
   step,
   onChange,
-  format,
   label,
+  unit = "",
+  scale = 1,
+  digits = 0,
+  steps,
 }: {
   value: number;
   min: number;
   max: number;
   step: number;
   onChange(v: number): void;
-  format(v: number): string;
   label: string;
+  /** 显示在数字后面的单位，比如 "px"、"%" */
+  unit?: string;
+  /** 显示值 = 实际值 × scale（比如 1.1 显示成 110%） */
+  scale?: number;
+  digits?: number;
+  /** 不等距的档位（整体缩放用浏览器一样的档位） */
+  steps?: number[];
 }) {
-  const id = useId();
-  const pct = ((value - min) / (max - min)) * 100;
+  const [draft, setDraft] = useState<string | null>(null);
+  const show = (v: number) => (v * scale).toFixed(digits);
+  const clampV = (v: number) => Math.min(max, Math.max(min, v));
+  const round = (v: number) => Math.round(v / step) * step;
+  const next = (dir: 1 | -1) => {
+    if (steps) {
+      const list = dir > 0 ? steps : [...steps].reverse();
+      return list.find((s) => (dir > 0 ? s > value + 1e-6 : s < value - 1e-6)) ?? value;
+    }
+    return clampV(+round(value + dir * step).toFixed(6));
+  };
+  const commit = () => {
+    if (draft === null) return;
+    const n = Number(draft.replace(/[^\d.\-]/g, "")) / scale;
+    if (Number.isFinite(n) && draft.trim() !== "") onChange(clampV(+n.toFixed(6)));
+    setDraft(null);
+  };
   return (
-    <div className="slider">
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        aria-label={label}
-        style={{ "--pct": `${pct}%` } as React.CSSProperties}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-      <output htmlFor={id}>{format(value)}</output>
+    <div className="stepper" role="group" aria-label={label}>
+      <button type="button" aria-label={`减小${label}`} disabled={value <= min + 1e-9} onClick={() => onChange(next(-1))}>
+        −
+      </button>
+      <label className="stepper-field">
+        <input
+          inputMode="decimal"
+          aria-label={label}
+          value={draft ?? show(value)}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") e.currentTarget.blur();
+            if (e.key === "Escape") {
+              setDraft(null);
+              e.currentTarget.blur();
+            }
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+              e.preventDefault();
+              setDraft(null);
+              onChange(next(e.key === "ArrowUp" ? 1 : -1));
+            }
+          }}
+        />
+        {unit && <span className="unit">{unit}</span>}
+      </label>
+      <button type="button" aria-label={`增大${label}`} disabled={value >= max - 1e-9} onClick={() => onChange(next(1))}>
+        +
+      </button>
     </div>
   );
 }

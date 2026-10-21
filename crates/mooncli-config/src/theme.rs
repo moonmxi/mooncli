@@ -177,39 +177,102 @@ impl Theme {
         Ok(out)
     }
 
-    /// 对比度检查，规则和 tools/check_contrast.py 一致。返回不达标的项。
+    /// 对比度检查，规则在 resources/contrast-rules.json（和 tools/check_contrast.py 共用）。返回不达标的项。
     pub fn check_contrast(&self) -> Result<Vec<ContrastIssue>> {
         let p = Rgba::parse;
+        let rules = rules();
+        let r = match self.kind {
+            Kind::Light => &rules.light,
+            Kind::Dark => &rules.dark,
+        };
         let t = &self.terminal;
         let bg = p(&t.background)?;
+        let accent_hue = p(&self.ui.accent)?.hue();
         let mut issues = Vec::new();
-        let mut want = |what: String, a: &str, b: Rgba, need: f64| -> Result<()> {
-            let r = contrast(p(a)?, b);
-            if r < need {
-                issues.push(ContrastIssue { what, ratio: (r * 100.0).round() / 100.0, need });
+        let mut want = |what: String, a: Rgba, b: Rgba, need: f64, max: Option<f64>| {
+            let v = contrast(a, b);
+            if v < need || max.is_some_and(|m| v > m) {
+                issues.push(ContrastIssue { what, ratio: (v * 100.0).round() / 100.0, need });
             }
-            Ok(())
         };
-        want("foreground".into(), &t.foreground, bg, 7.0)?;
-        want("selection".into(), &t.foreground, p(&t.selection_background)?, 4.5)?;
-        want("cursor".into(), &t.cursor, bg, 3.0)?;
-        let soft: &[&str] = match self.kind {
-            Kind::Light => &["white", "brightWhite", "brightBlack"],
-            Kind::Dark => &["black", "brightBlack"],
-        };
+        want("foreground".into(), p(&t.foreground)?, bg, r.foreground[0].unwrap_or(0.0), None);
+        want("selection".into(), p(&t.foreground)?, p(&t.selection_background)?, r.selection[0].unwrap_or(0.0), None);
+        want("cursor".into(), p(&t.cursor)?, bg, r.cursor[0].unwrap_or(0.0), None);
         for (name, c) in t.ansi() {
-            want(name.into(), c, bg, if soft.contains(&name) { 3.0 } else { 4.5 })?;
+            let c = p(c)?;
+            let [lo, hi] = match r.ansi.get(name) {
+                Some(range) => *range,
+                None => {
+                    let bright = name.starts_with("bright");
+                    let mut range = r.ansi[if bright { "bright" } else { "normal" }];
+                    if hue_distance(c.hue(), accent_hue) < r.near_accent.degrees {
+                        let need = if bright { r.near_accent.bright } else { r.near_accent.normal };
+                        range[0] = Some(range[0].unwrap_or(0.0).max(need));
+                    }
+                    range
+                }
+            };
+            want(name.into(), c, bg, lo.unwrap_or(0.0), hi);
         }
         let u = &self.ui;
+        let ur = &rules.ui;
         for (sname, s) in [("surface0", &u.surface0), ("surface1", &u.surface1), ("surface2", &u.surface2)] {
             let s = p(s)?;
-            want(format!("ui.text/{sname}"), &u.text, s, 7.0)?;
-            want(format!("ui.textMuted/{sname}"), &u.text_muted, s, 4.5)?;
+            want(format!("ui.text/{sname}"), p(&u.text)?, s, ur.text, None);
+            want(format!("ui.textMuted/{sname}"), p(&u.text_muted)?, s, ur.text_muted, None);
         }
-        want("ui.accent/surface1".into(), &u.accent, p(&u.surface1)?, 3.0)?;
-        want("ui.onAccent/accent".into(), &u.on_accent, p(&u.accent)?, 4.5)?;
+        want("ui.accent/surface1".into(), p(&u.accent)?, p(&u.surface1)?, ur.accent_on_surface1, None);
+        want("ui.onAccent/accent".into(), p(&u.on_accent)?, p(&u.accent)?, ur.on_accent, None);
         Ok(issues)
     }
+}
+
+#[derive(Deserialize)]
+struct Rules {
+    light: KindRules,
+    dark: KindRules,
+    ui: UiRules,
+}
+
+type Range = [Option<f64>; 2];
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KindRules {
+    foreground: Range,
+    selection: Range,
+    cursor: Range,
+    ansi: std::collections::HashMap<String, Range>,
+    near_accent: NearAccent,
+}
+
+#[derive(Deserialize)]
+struct NearAccent {
+    degrees: f64,
+    normal: f64,
+    bright: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UiRules {
+    text: f64,
+    text_muted: f64,
+    accent_on_surface1: f64,
+    on_accent: f64,
+}
+
+fn rules() -> &'static Rules {
+    static R: std::sync::OnceLock<Rules> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../resources/contrast-rules.json"))
+            .expect("contrast-rules.json 格式不对")
+    })
+}
+
+fn hue_distance(a: f64, b: f64) -> f64 {
+    let d = (a - b).rem_euclid(360.0);
+    d.min(360.0 - d)
 }
 
 /// 一组可用的主题：内置 + 用户目录里的。

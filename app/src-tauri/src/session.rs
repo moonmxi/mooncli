@@ -1,8 +1,9 @@
 //! 会话桥：把伪终端的输出和 shell 集成事件翻译成界面消息（app/src/backend/types.ts 的 SessionMsg），
 //! 顺便把命令写进历史库。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use mooncli_history::{CommandRecord, Store};
@@ -45,17 +46,58 @@ struct SessionInfo {
     running: Option<Running>,
 }
 
+/// 每个会话收到了什么，诊断"未集成"用：
+/// 输出很多但一个标记都没有 → 标记被 ConPTY 吞了或集成脚本没运行；只有不带 nonce 的标记 → nonce 没传到。
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStats {
+    pub output_bytes: u64,
+    pub trusted_marks: u64,
+    pub untrusted_marks: u64,
+    pub private_messages: u64,
+    pub age_ms: u64,
+}
+
+#[derive(Default)]
+struct Counters {
+    output_bytes: AtomicU64,
+    trusted_marks: AtomicU64,
+    untrusted_marks: AtomicU64,
+    private_messages: AtomicU64,
+}
+
 pub struct UiSink {
     pub id: String,
     channel: Channel<UiMsg>,
     tracker: Mutex<Tracker>,
     info: Mutex<SessionInfo>,
     history: Arc<Mutex<Option<Store>>>,
+    counters: Counters,
+    started: Instant,
 }
 
 impl UiSink {
     pub fn new(id: String, channel: Channel<UiMsg>, history: Arc<Mutex<Option<Store>>>) -> Self {
-        Self { id, channel, tracker: Mutex::new(Tracker::default()), info: Mutex::default(), history }
+        Self {
+            id,
+            channel,
+            tracker: Mutex::new(Tracker::default()),
+            info: Mutex::default(),
+            history,
+            counters: Counters::default(),
+            started: Instant::now(),
+        }
+    }
+
+    pub fn stats(&self) -> SessionStats {
+        let c = &self.counters;
+        SessionStats {
+            output_bytes: c.output_bytes.load(Ordering::Relaxed),
+            trusted_marks: c.trusted_marks.load(Ordering::Relaxed),
+            untrusted_marks: c.untrusted_marks.load(Ordering::Relaxed),
+            private_messages: c.private_messages.load(Ordering::Relaxed),
+            age_ms: self.started.elapsed().as_millis() as u64,
+        }
     }
 
     fn send(&self, m: UiMsg) {
@@ -64,6 +106,17 @@ impl UiSink {
     }
 
     fn on_event(&self, e: ShellEvent) {
+        let counter = match &e {
+            ShellEvent::Mark { trusted: true, .. } | ShellEvent::CommandEnd { trusted: true, .. } => {
+                Some(&self.counters.trusted_marks)
+            }
+            ShellEvent::Mark { .. } | ShellEvent::CommandEnd { .. } => Some(&self.counters.untrusted_marks),
+            ShellEvent::Private { .. } => Some(&self.counters.private_messages),
+            _ => None,
+        };
+        if let Some(c) = counter {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
         let updates = self.tracker.lock().unwrap().apply(&e);
         for u in updates {
             self.on_update(u);
@@ -137,6 +190,7 @@ impl Sink for UiSink {
             match item {
                 Item::Output(b) => {
                     let bytes = b.len();
+                    self.counters.output_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
                     let data = base64::engine::general_purpose::STANDARD.encode(&b);
                     self.send(UiMsg::Output { data, bytes });
                 }

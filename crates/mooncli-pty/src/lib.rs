@@ -1,5 +1,6 @@
 //! 伪终端会话和 shell 启动。
 
+pub mod conpty;
 pub mod session;
 pub mod shell;
 

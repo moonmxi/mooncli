@@ -224,6 +224,7 @@ export function demoBackend(): Backend {
     diagnostics: async () => ({
       appVersion: "0.1.0（演示）",
       os: "browser",
+      osVersion: "",
       shellPath: null,
       shellKind: "演示后端",
       integrationEnabled: true,
@@ -233,6 +234,7 @@ export function demoBackend(): Backend {
       historyCount: demoHistory.length,
       backgroundsDir: "内存",
     }),
+    sessionStats: async () => ({ outputBytes: 1024, trustedMarks: 4, untrustedMarks: 0, privateMessages: 1, ageMs: 1000 }),
     async historySearch(text, opts) {
       const q = text.toLowerCase();
       const seen = new Set<string>();

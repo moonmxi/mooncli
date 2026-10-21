@@ -14,6 +14,12 @@ ConPTY 是 Windows 提供的"伪终端"：我们创建一个，它会给 pwsh �
 - 我们用的 `portable-pty`（WezTerm 的伪终端库）第一次创建伪终端时，会按系统的 DLL 搜索顺序找 `conpty.dll`，找不到就用系统 `kernel32` 里的版本。所以启动时用 `SetDllDirectoryW` 把 `conpty/` 加进搜索路径即可（`app/src-tauri/src/conpty.rs`）。
 - 设置里留一个开关"使用附带的 ConPTY"，关掉时不加这个目录，就会退回系统版本，方便排查问题。
 
+**这一条不是锦上添花，是必须的。** 第二版安装包在用户机器上仍然显示"未集成"，而 CI 里的 Windows 测试却是通过的。差别在于：CI 用的是最新的 Windows Server，自带的 ConPTY 会把 shell 集成标记原样转发；而 Windows 10 和较早的 Windows 11 自带的 ConPTY 会把它不认识的终端标记（OSC 133、OSC 7、mooncli 的私有序列）吞掉，终端一个信号都收不到。现在：
+
+- 打包前由 `tools/fetch_conpty.py` 下载微软官方 `Microsoft.Windows.Console.ConPTY` 包（固定版本、校验 SHA-256），取出 x64 的 `conpty.dll` 和 `OpenConsole.exe` 放进安装包。
+- Windows CI 会先用系统自带的、再用附带的 ConPTY 各跑一遍 pwsh 集成测试。
+- 设置 → Shell 与诊断里显示系统版本、用的是哪个 ConPTY，以及当前标签页**收到了多少集成标记**（本机标记、其它标记、私有消息、输出字节数）。据此自动判断"未集成"的原因：一个标记都没收到 + 系统 ConPTY → ConPTY 吞了标记；只收到不带 nonce 的标记 → 是里面又开了别的 shell；等等。
+
 ### 创建参数
 
 | 项 | 做法 |

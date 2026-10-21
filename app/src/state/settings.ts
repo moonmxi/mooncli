@@ -10,6 +10,8 @@ export const DEFAULT_FONT_FAMILY =
 export type ThemeChoice = string | { light: string; dark: string; follow: "system" | "off" };
 
 export interface AppSettings {
+  /** 设置格式的版本，用来迁移旧的默认值 */
+  version: number;
   theme: ThemeChoice;
   /** 整体缩放：界面和终端一起（Ctrl+= / Ctrl+- / Ctrl+0） */
   zoom: number;
@@ -41,11 +43,14 @@ export interface AppSettings {
     rightClick: "copyPaste" | "menu";
     copyToast: boolean;
   };
-  shell: { path: string | null; args: string[]; integration: boolean; useBundledConpty: boolean };
+  shell: { path: string | null; args: string[]; integration: boolean; useBundledConpty: boolean; adaptColors: boolean };
   history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean };
 }
 
+export const SETTINGS_VERSION = 2;
+
 export const DEFAULTS: AppSettings = {
+  version: SETTINGS_VERSION,
   theme: { light: "moon-paper", dark: "night-voyage", follow: "off" },
   zoom: 1,
   uiScale: 1,
@@ -64,7 +69,8 @@ export const DEFAULTS: AppSettings = {
   tabs: { position: "left", sidebar: { width: 220, autoCollapse: true }, titleSource: "auto" },
   terminal: {
     scrollback: 10_000,
-    minimumContrastRatio: 4.5,
+    // 3 而不是 4.5：太高会把灰色的联想提示也加深到正文那么深，分不清哪些是输入的（docs/08 §2）
+    minimumContrastRatio: 3,
     cursorStyle: "bar",
     cursorBlink: true,
     smoothScrollMs: 120,
@@ -74,7 +80,7 @@ export const DEFAULTS: AppSettings = {
     rightClick: "copyPaste",
     copyToast: true,
   },
-  shell: { path: null, args: [], integration: true, useBundledConpty: true },
+  shell: { path: null, args: [], integration: true, useBundledConpty: true, adaptColors: true },
   history: { enabled: true, ignorePatterns: [], importPsreadline: true },
 };
 
@@ -114,6 +120,10 @@ export function mergeSettings(saved: unknown, defaults: AppSettings = DEFAULTS):
     return typeof s === typeof d ? s : d;
   };
   const m = walk(defaults, saved) as AppSettings;
+  // 迁移：第 1 版的"最低对比度"默认是 4.5，没改过的换成新的默认值 3
+  const savedVersion = isPlain(saved) && typeof saved.version === "number" ? saved.version : 1;
+  if (savedVersion < 2 && m.terminal.minimumContrastRatio === 4.5) m.terminal.minimumContrastRatio = defaults.terminal.minimumContrastRatio;
+  m.version = SETTINGS_VERSION;
   m.zoom = clamp(m.zoom, LIMITS.zoom.min, LIMITS.zoom.max);
   m.uiScale = clamp(m.uiScale, LIMITS.uiScale.min, LIMITS.uiScale.max);
   m.font.size = clamp(m.font.size, LIMITS.fontSize.min, LIMITS.fontSize.max);

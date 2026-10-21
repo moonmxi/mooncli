@@ -31,6 +31,7 @@ export interface CreateOptions {
 export interface Diagnostics {
   appVersion: string;
   os: string;
+  osVersion: string;
   shellPath: string | null;
   shellKind: string | null;
   integrationEnabled: boolean;
@@ -39,6 +40,14 @@ export interface Diagnostics {
   historyPath: string;
   historyCount: number | null;
   backgroundsDir: string;
+}
+
+export interface SessionStats {
+  outputBytes: number;
+  trustedMarks: number;
+  untrustedMarks: number;
+  privateMessages: number;
+  ageMs: number;
 }
 
 export interface HistoryHit {
@@ -62,6 +71,7 @@ export interface Backend {
   backgroundList(): Promise<string[]>;
   backgroundDelete(name: string): Promise<void>;
   diagnostics(): Promise<Diagnostics>;
+  sessionStats(id: string): Promise<SessionStats>;
   historySearch(text: string, opts?: { cwd?: string; limit?: number }): Promise<HistoryHit[]>;
   create(opts: CreateOptions, onMsg: (m: SessionMsg) => void): Promise<void>;
   write(id: string, data: string): void;

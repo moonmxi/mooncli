@@ -1,7 +1,7 @@
 // 真正的后端：通过 Tauri 调 Rust 主程序（app/src-tauri/src/session.rs）。
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Backend, CreateOptions, Diagnostics, HistoryHit, SessionMsg } from "./types";
+import type { Backend, CreateOptions, Diagnostics, HistoryHit, SessionMsg, SessionStats } from "./types";
 
 const log = (what: string) => (e: unknown) => console.error(`mooncli: ${what}失败`, e);
 
@@ -18,6 +18,7 @@ export function tauriBackend(): Backend {
     backgroundList: () => invoke<string[]>("background_list"),
     backgroundDelete: (name) => invoke("background_delete", { name }),
     diagnostics: () => invoke<Diagnostics>("diagnostics"),
+    sessionStats: (id) => invoke<SessionStats>("session_stats", { id }),
     historySearch: (text, opts) =>
       invoke<HistoryHit[]>("history_search", {
         query: { text, nowMs: Date.now(), cwd: opts?.cwd ?? null, limit: opts?.limit ?? 50 },

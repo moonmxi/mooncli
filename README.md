@@ -1,10 +1,14 @@
+<p align="center"><img src="design/logo/mooncli.svg" width="96" height="96" alt="mooncli"></p>
+
 # mooncli
 
 一个为 Windows 做的第三方终端，底层跑 PowerShell 7（pwsh）。
 
 它想解决的事情很简单：**好看（尤其是浅色）、记得住命令、用着顺手、看得懂每个标签页里在干什么**。
 
-> 当前状态：M0 骨架完成，M1（能用的终端）和 M2（shell 集成）大部分完成。进度见 [docs/09](docs/09-roadmap.md#当前进度)。还没有在 Windows 真机上验证过，CI 会打出安装包供试用。
+> 当前状态：早期开发中，日常能用，智能功能陆续加入。进度见 [docs/09](docs/09-roadmap.md#当前进度)。
+>
+> **下载**：[mooncli-setup-x64.exe](https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe)（每次推送自动更新）。安装包暂未签名，Windows 可能会提示"未知发布者"，原因和解决办法见 [docs/10](docs/10-release.md)。
 
 ## 主要特点（计划中）
 
@@ -30,6 +34,7 @@
 | [07 Agent 用量小窗](docs/07-agent-monitor.md) | 数据来源、合规边界、小窗设计 |
 | [08 美术风格与版面](docs/08-art-direction.md) | 配色、字体、间距、各区域版面规格 |
 | [09 实现计划](docs/09-roadmap.md) | 里程碑、任务拆分、验收标准、风险 |
+| [10 发布与签名](docs/10-release.md) | 去哪下载、为什么安装时会被拦、代码签名怎么配 |
 
 ## 开发
 
@@ -55,10 +60,13 @@ cargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑�
 | `app/src` | 界面：标签栏、终端、状态栏、布局规则 |
 | `shell/pwsh/MoonCli.ps1` | pwsh 集成脚本 |
 
-每次推送，GitHub Actions 会在 Windows 上编译并打出安装包，在 Actions 页面的 `mooncli-windows-installer` 里下载。
+每次推送，GitHub Actions 会在 Windows 上编译、测试并打出安装包，直接发到 Release 页的 `nightly` 预发布版。
 
 ## 设计资源
 
 - [design/themes/](design/themes/)：内置主题的配色文件
 - [design/mockup/index.html](design/mockup/index.html)：版面原型，浏览器直接打开，可切换主题和标签栏位置
-- [tools/check_contrast.py](tools/check_contrast.py)：主题对比度检查脚本，`python3 tools/check_contrast.py`
+- [design/logo/](design/logo/)：图标源文件和各尺寸预览
+- [tools/check_contrast.py](tools/check_contrast.py)：主题对比度检查，规则在 [resources/contrast-rules.json](resources/contrast-rules.json)
+- [tools/tune_palette.py](tools/tune_palette.py)：按规则自动微调主题的 16 色
+- [tools/fetch_conpty.py](tools/fetch_conpty.py)：下载安装包附带的新版 ConPTY

@@ -17,8 +17,13 @@ use session::{UiMsg, UiSink};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
+struct SessionEntry {
+    session: Arc<Session>,
+    sink: Arc<UiSink>,
+}
+
 struct AppState {
-    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    sessions: Mutex<HashMap<String, SessionEntry>>,
     shell: Mutex<Option<ShellSpec>>,
     history: Arc<Mutex<Option<Store>>>,
     /// 界面保存的原样设置（JSON）。Rust 端只读其中自己用得到的字段。
@@ -29,6 +34,7 @@ struct AppState {
     /// 剪贴板对象要一直留着：Linux 上它一释放，写进去的内容就没了
     clipboard: Mutex<Option<arboard::Clipboard>>,
     bundled_conpty: bool,
+    os_version: String,
 }
 
 impl AppState {
@@ -66,6 +72,7 @@ fn session_create(
         shell: &shell,
         extra_args: &settings.shell.args,
         integration: settings.shell.integration,
+        adapt_colors: settings.shell.adapt_colors,
         session_id: &id,
         cwd,
         cols,
@@ -73,9 +80,9 @@ fn session_create(
         app_version: env!("CARGO_PKG_VERSION"),
     });
     let sink = Arc::new(UiSink::new(id.clone(), channel, state.history.clone()));
-    let session = Session::spawn(opts, sink).map_err(err)?;
+    let session = Session::spawn(opts, sink.clone()).map_err(err)?;
     // 同一个 id 再创建（比如界面重新加载）时，旧会话随 drop 结束
-    state.sessions.lock().unwrap().insert(id, Arc::new(session));
+    state.sessions.lock().unwrap().insert(id, SessionEntry { session: Arc::new(session), sink });
     Ok(())
 }
 
@@ -84,7 +91,8 @@ fn dirs_home() -> Option<String> {
 }
 
 fn with_session<T>(state: &State<'_, AppState>, id: &str, f: impl FnOnce(&Session) -> T) -> CmdResult<T> {
-    let s = state.sessions.lock().unwrap().get(id).cloned().ok_or_else(|| format!("会话 {id} 不存在"))?;
+    let s =
+        state.sessions.lock().unwrap().get(id).map(|e| e.session.clone()).ok_or_else(|| format!("会话 {id} 不存在"))?;
     Ok(f(&s))
 }
 
@@ -101,6 +109,11 @@ fn session_resize(state: State<'_, AppState>, id: String, cols: u16, rows: u16) 
 #[tauri::command]
 fn session_ack(state: State<'_, AppState>, id: String, bytes: usize) -> CmdResult<()> {
     with_session(&state, &id, |s| s.ack(bytes))
+}
+
+#[tauri::command]
+fn session_stats(state: State<'_, AppState>, id: String) -> CmdResult<session::SessionStats> {
+    state.sessions.lock().unwrap().get(&id).map(|e| e.sink.stats()).ok_or_else(|| format!("会话 {id} 不存在"))
 }
 
 #[tauri::command]
@@ -194,6 +207,7 @@ fn background_delete(state: State<'_, AppState>, name: String) -> CmdResult<()> 
 struct Diagnostics {
     app_version: &'static str,
     os: &'static str,
+    os_version: String,
     shell_path: Option<String>,
     shell_kind: Option<String>,
     integration_enabled: bool,
@@ -210,6 +224,7 @@ fn diagnostics(state: State<'_, AppState>) -> Diagnostics {
     Diagnostics {
         app_version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
+        os_version: state.os_version.clone(),
         shell_path: shell.as_ref().map(|s| s.program.display().to_string()),
         shell_kind: shell.as_ref().map(|s| format!("{:?}", s.kind)),
         integration_enabled: state.typed_settings().shell.integration,
@@ -218,6 +233,27 @@ fn diagnostics(state: State<'_, AppState>) -> Diagnostics {
         history_path: state.history_path.display().to_string(),
         history_count: state.history.lock().unwrap().as_ref().and_then(|s| s.count().ok()),
         backgrounds_dir: state.backgrounds_dir.display().to_string(),
+    }
+}
+
+/// 系统版本号，比如 "10.0.19045.5011"。Windows 10 和较早的 Windows 11 自带的 ConPTY 会吞掉集成标记。
+fn os_version() -> String {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if let Ok(out) = std::process::Command::new("cmd").args(["/c", "ver"]).creation_flags(CREATE_NO_WINDOW).output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(v) = text.split_once("Version ").map(|(_, r)| r.trim().trim_end_matches(']').to_string()) {
+                return v;
+            }
+        }
+        String::new()
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::read_to_string("/proc/sys/kernel/osrelease").map(|s| s.trim().to_string()).unwrap_or_default()
     }
 }
 
@@ -259,7 +295,6 @@ fn open_history(path: &std::path::Path, import: bool) -> Option<Store> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let bundled_conpty = conpty::prefer_bundled(app.handle());
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&config_dir)?;
@@ -267,6 +302,8 @@ pub fn run() {
             let settings_path = config_dir.join("settings.json");
             let settings = files::read_settings(&settings_path);
             let typed: Settings = serde_json::from_value(settings.clone()).unwrap_or_default();
+            // 必须在创建第一个会话之前
+            let bundled_conpty = conpty::prefer_bundled(app.handle(), typed.shell.use_bundled_conpty);
             let history_path = data_dir.join("history.db");
 
             let history = Arc::new(Mutex::new(None));
@@ -287,6 +324,7 @@ pub fn run() {
                 history_path,
                 clipboard: Mutex::new(None),
                 bundled_conpty,
+                os_version: os_version(),
             });
             Ok(())
         })
@@ -296,6 +334,7 @@ pub fn run() {
             session_resize,
             session_ack,
             session_close,
+            session_stats,
             history_search,
             settings_get,
             settings_set,

@@ -38,6 +38,25 @@ impl Rgba {
         Rgba { r: mix(self.r, bg.r), g: mix(self.g, bg.g), b: mix(self.b, bg.b), a: 255 }
     }
 
+    /// HSL 色相，0–360 度（和 Python colorsys 的 HLS 色相一致）
+    pub fn hue(self) -> f64 {
+        let (r, g, b) = (self.r as f64 / 255.0, self.g as f64 / 255.0, self.b as f64 / 255.0);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        if d == 0.0 {
+            return 0.0;
+        }
+        let h = if max == r {
+            ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        h * 60.0
+    }
+
     pub fn luminance(self) -> f64 {
         let ch = |c: u8| {
             let c = c as f64 / 255.0;
@@ -65,6 +84,8 @@ mod tests {
         assert_eq!(Rgba::parse("#11223380").unwrap().a, 0x80);
         assert!(Rgba::parse("red").is_err());
         assert!(Rgba::parse("#12345").is_err());
+        assert!((Rgba::parse("#FF0000").unwrap().hue() - 0.0).abs() < 1e-9);
+        assert!((Rgba::parse("#0000FF").unwrap().hue() - 240.0).abs() < 1e-9);
         // 0.5 存成 alpha 128（=0.502），叠在白底上是 127
         assert_eq!(k.with_alpha(0.5).over(w).to_hex(), "#7F7F7F");
     }

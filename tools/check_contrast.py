@@ -1,68 +1,43 @@
-"""检查 design/themes 下所有主题的颜色对比度（WCAG 2.x 公式）。
+"""检查 design/themes 下所有主题的颜色对比度。规则在 resources/contrast-rules.json。
 
 用法: python3 tools/check_contrast.py
-不达标时打印问题并以非 0 退出，可直接接进 CI。
+不达标时打印问题并以非 0 退出，CI 会跑。不达标时可以先运行 tools/tune_palette.py 自动微调。
 """
 import json
-import pathlib
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+from contrast_rules import ANSI_ALL, ROOT, RULES, ratio, range_for
+
 THEMES = ROOT / "design" / "themes"
 
-ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"]
-ANSI_ALL = ANSI + ["bright" + c.capitalize() for c in ANSI]
 
-
-def lum(hex_color: str) -> float:
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
-
-    def ch(c):
-        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-
-    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
-
-
-def ratio(a: str, b: str) -> float:
-    la, lb = sorted((lum(a), lum(b)), reverse=True)
-    return (la + 0.05) / (lb + 0.05)
-
-
-def need_for(name: str, kind: str) -> float:
-    # 浅色主题里 white / brightWhite 是“程序以为在深色背景上的白字”，
-    # 会被映射成浅灰，只要求 3:1；暗色主题里 black 同理。
-    # brightBlack 常用于注释、联想提示等次要文字，同样要求 3:1。
-    soft = {"white", "brightWhite"} if kind == "light" else {"black", "brightBlack"}
-    if name in soft or name == "brightBlack":
-        return 3.0
-    return 4.5
-
-
-def check(path: pathlib.Path) -> list[str]:
+def check(path) -> list[str]:
     t = json.loads(path.read_text(encoding="utf-8"))
-    term, ui, kind = t["terminal"], t["ui"], t["kind"]
+    term, ui = t["terminal"], t["ui"]
+    rules = RULES[t["kind"]]
     bg = term["background"]
     problems = []
 
-    def want(label, a, b, need):
-        r = ratio(a, b)
-        mark = "ok " if r >= need else "LOW"
-        print(f"  {mark} {label:<28} {r:5.2f}  (>= {need})")
-        if r < need:
-            problems.append(f"{path.name}: {label} {r:.2f} < {need}")
+    def want(label, value, lo, hi=None):
+        ok = value >= lo and (hi is None or value <= hi)
+        rng = f">= {lo}" if hi is None else f"{lo} ~ {hi}"
+        print(f"  {'ok ' if ok else 'BAD'} {label:<34} {value:5.2f}  ({rng})")
+        if not ok:
+            problems.append(f"{path.name}: {label} {value:.2f} 不在 {rng}")
 
     print(f"\n{t['displayName']} ({path.name})")
-    want("foreground / background", term["foreground"], bg, 7.0)
-    want("selection text", term["foreground"], term["selectionBackground"], 4.5)
-    want("cursor / background", term["cursor"], bg, 3.0)
+    want("foreground", ratio(term["foreground"], bg), rules["foreground"][0])
+    want("selection 上的文字", ratio(term["foreground"], term["selectionBackground"]), rules["selection"][0])
+    want("cursor", ratio(term["cursor"], bg), rules["cursor"][0])
     for name in ANSI_ALL:
-        want(name, term[name], bg, need_for(name, kind))
+        lo, hi, why = range_for(t, name)
+        want(f"{name} [{why}]", ratio(term[name], bg), lo, hi)
+    u = RULES["ui"]
     for surf in ("surface0", "surface1", "surface2"):
-        want(f"ui.text / {surf}", ui["text"], ui[surf], 7.0)
-        want(f"ui.textMuted / {surf}", ui["textMuted"], ui[surf], 4.5)
-    want("ui.accent / surface1", ui["accent"], ui["surface1"], 3.0)
-    want("ui.onAccent / accent", ui["onAccent"], ui["accent"], 4.5)
+        want(f"ui.text / {surf}", ratio(ui["text"], ui[surf]), u["text"])
+        want(f"ui.textMuted / {surf}", ratio(ui["textMuted"], ui[surf]), u["textMuted"])
+    want("ui.accent / surface1", ratio(ui["accent"], ui["surface1"]), u["accentOnSurface1"])
+    want("ui.onAccent / accent", ratio(ui["onAccent"], ui["accent"]), u["onAccent"])
     return problems
 
 

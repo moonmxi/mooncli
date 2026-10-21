@@ -1,7 +1,8 @@
 node_modules/
 target/
 dist/
-resources/conpty/
+app/src-tauri/resources/conpty/*
+!app/src-tauri/resources/conpty/README.md
 __pycache__/
 *.log
 app/src-tauri/gen/

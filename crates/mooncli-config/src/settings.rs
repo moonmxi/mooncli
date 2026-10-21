@@ -230,7 +230,7 @@ impl Default for Terminal {
     fn default() -> Self {
         Self {
             scrollback: 10_000,
-            minimum_contrast_ratio: 4.5,
+            minimum_contrast_ratio: 3.0,
             cursor_style: "bar".into(),
             cursor_blink: true,
             smooth_scroll_ms: 120,
@@ -252,11 +252,13 @@ pub struct Shell {
     /// 关掉后智能功能降级，终端照常可用
     pub integration: bool,
     pub use_bundled_conpty: bool,
+    /// 让 PSReadLine 和 $PSStyle 的配色跟随主题
+    pub adapt_colors: bool,
 }
 
 impl Default for Shell {
     fn default() -> Self {
-        Self { path: None, args: Vec::new(), integration: true, use_bundled_conpty: true }
+        Self { path: None, args: Vec::new(), integration: true, use_bundled_conpty: true, adapt_colors: true }
     }
 }
 

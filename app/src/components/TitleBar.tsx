@@ -37,7 +37,7 @@ export function TitleBar({ backend, bp, showMenu, topTabs, now, actions }: Props
         </button>
       )}
       <div className="brand" data-tauri-drag-region>
-        <Icon name="moon" size={20} />
+        <img className="brand-mark" src="/mooncli.svg" width={20} height={20} alt="" />
         {!(topTabs || bp === "sm") && <span className="name">mooncli</span>}
       </div>
       {topTabs && (

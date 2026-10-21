@@ -1,7 +1,7 @@
 // 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键。改动立即生效并自动保存。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bytesToBase64 } from "../../backend/base64";
-import type { Backend, Diagnostics } from "../../backend/types";
+import type { Backend, Diagnostics, SessionStats } from "../../backend/types";
 import { SIDEBAR } from "../../layout/layout";
 import {
   DEFAULTS,
@@ -10,7 +10,7 @@ import {
   effectiveFontSize,
   pickTheme,
   useSettings,
-  zoomStep,
+  ZOOM_STEPS,
   type AppSettings,
 } from "../../state/settings";
 import { useStore } from "../../state/store";
@@ -18,7 +18,7 @@ import { useUi, type SettingsSection } from "../../state/ui";
 import { BUILTIN_BACKGROUNDS, isBuiltin, renderBuiltin } from "../../theme/backgrounds";
 import { builtinThemes, type Theme } from "../../theme/theme";
 import { Icon } from "../Icons";
-import { Group, Row, Segmented, Select, Slider, TextInput, Toggle } from "./controls";
+import { Group, Row, Segmented, Select, Stepper, TextInput, Toggle } from "./controls";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "appearance", label: "外观", icon: "palette" },
@@ -28,8 +28,6 @@ const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "shell", label: "Shell 与诊断", icon: "info" },
   { id: "keys", label: "快捷键", icon: "keyboard" },
 ];
-
-const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 type Update = (f: (d: AppSettings) => void) => void;
 
@@ -53,50 +51,58 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
     </button>
   );
 
+  // 居中弹窗：周围留出半透明遮罩，点遮罩、按 Esc、点"完成"或右上角 × 都能关闭
   return (
-    <div
-      className="settings-page"
-      role="dialog"
-      aria-label="设置"
-      tabIndex={-1}
-      ref={ref}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.stopPropagation();
-          close();
-        }
-      }}
-    >
-      <div className="settings-inner ui-zoom">
-        <nav className="set-nav" aria-label="设置分类">
-          <div className="set-nav-title">设置</div>
-          {SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              className={`set-nav-item${section === s.id ? " on" : ""}`}
-              aria-current={section === s.id}
-              onClick={() => openSection(s.id)}
-            >
-              <Icon name={s.icon} />
-              {s.label}
-            </button>
-          ))}
-          <div className="set-nav-foot">改动会立即生效，并自动保存。</div>
-        </nav>
-        <div className="set-body">
-          <header className="set-head">
-            <h2>{SECTIONS.find((s) => s.id === section)?.label}</h2>
-            <button type="button" className="icon-btn" aria-label="关闭设置 (Esc)" title="关闭 (Esc)" onClick={close}>
-              <Icon name="close" />
-            </button>
-          </header>
+    <div className="set-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div
+        className="settings"
+        role="dialog"
+        aria-modal="true"
+        aria-label="设置"
+        tabIndex={-1}
+        ref={ref}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            close();
+          }
+        }}
+      >
+        <header className="set-top">
+          <Icon name="gear" />
+          <h2>设置</h2>
+          <span className="set-saved">改动立即生效，并自动保存</span>
+          <button type="button" className="btn primary set-done" onClick={close}>
+            完成
+          </button>
+          <button type="button" className="icon-btn" aria-label="关闭设置 (Esc)" title="关闭 (Esc)" onClick={close}>
+            <Icon name="close" />
+          </button>
+        </header>
+        <div className="set-main">
+          <nav className="set-nav" aria-label="设置分类">
+            {SECTIONS.map((sec) => (
+              <button
+                key={sec.id}
+                type="button"
+                className={`set-nav-item${section === sec.id ? " on" : ""}`}
+                aria-current={section === sec.id}
+                onClick={() => openSection(sec.id)}
+              >
+                <Icon name={sec.icon} />
+                <span>{sec.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="set-body">
+          <h3 className="set-section">{SECTIONS.find((x) => x.id === section)?.label}</h3>
           {section === "appearance" && <Appearance s={settings} update={update} backend={backend} systemDark={systemDark} reset={reset} />}
           {section === "font" && <FontAndZoom s={settings} update={update} reset={reset} />}
           {section === "terminal" && <TerminalSection s={settings} update={update} reset={reset} />}
           {section === "tabs" && <TabsSection s={settings} update={update} reset={reset} />}
           {section === "shell" && <ShellSection s={settings} update={update} backend={backend} />}
           {section === "keys" && <KeysSection />}
+          </div>
         </div>
       </div>
     </div>
@@ -270,19 +276,19 @@ function BackgroundGroup({ s, update, backend, theme, reset }: { s: AppSettings;
       {bg.image !== null && (
         <>
           <Row label="图片不透明度">
-            <Slider label="图片不透明度" value={bg.opacity} min={0.05} max={1} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.opacity = v))} />
+            <Stepper label="图片不透明度" value={bg.opacity} min={0.05} max={1} step={0.05} scale={100} unit="%" onChange={(v) => update((d) => (d.background.opacity = v))} />
           </Row>
           <Row label="文字保护" desc="在图片上盖一层和底色相同的半透明层，让文字更清楚">
-            <Slider label="文字保护" value={bg.overlay} min={0} max={0.95} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.overlay = v))} />
+            <Stepper label="文字保护" value={bg.overlay} min={0} max={0.95} step={0.05} scale={100} unit="%" onChange={(v) => update((d) => (d.background.overlay = v))} />
           </Row>
           <Row label="模糊">
-            <Slider label="模糊" value={bg.blur} min={0} max={30} step={1} format={(v) => `${v}px`} onChange={(v) => update((d) => (d.background.blur = v))} />
+            <Stepper label="模糊" value={bg.blur} min={0} max={30} step={1} unit="px" onChange={(v) => update((d) => (d.background.blur = v))} />
           </Row>
           <Row label="亮度">
-            <Slider label="亮度" value={bg.brightness} min={0.5} max={1.5} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.brightness = v))} />
+            <Stepper label="亮度" value={bg.brightness} min={0.5} max={1.5} step={0.05} scale={100} unit="%" onChange={(v) => update((d) => (d.background.brightness = v))} />
           </Row>
           <Row label="饱和度">
-            <Slider label="饱和度" value={bg.saturation} min={0} max={1.5} step={0.05} format={pct} onChange={(v) => update((d) => (d.background.saturation = v))} />
+            <Stepper label="饱和度" value={bg.saturation} min={0} max={1.5} step={0.05} scale={100} unit="%" onChange={(v) => update((d) => (d.background.saturation = v))} />
           </Row>
           <Row label="填充方式">
             <Segmented
@@ -344,23 +350,17 @@ function FontAndZoom({ s, update, reset }: { s: AppSettings; update: Update; res
       <Group title="缩放" action={reset((d) => ((d.zoom = 1), (d.uiScale = 1), (d.font.size = DEFAULTS.font.size)))}>
         <Row label="整体缩放" desc="界面和终端文字一起放大缩小。快捷键 Ctrl+= / Ctrl+- / Ctrl+0">
           <div className="zoom-ctl">
-            <button type="button" className="btn" aria-label="缩小" onClick={() => update((d) => (d.zoom = zoomStep(d.zoom, -1)))}>
-              −
-            </button>
-            <span className="zoom-val">{pct(s.zoom)}</span>
-            <button type="button" className="btn" aria-label="放大" onClick={() => update((d) => (d.zoom = zoomStep(d.zoom, 1)))}>
-              +
-            </button>
+            <Stepper label="整体缩放" value={s.zoom} min={LIMITS.zoom.min} max={LIMITS.zoom.max} step={0.05} steps={ZOOM_STEPS} scale={100} unit="%" onChange={(v) => update((d) => (d.zoom = v))} />
             <button type="button" className="link-btn" disabled={s.zoom === 1} onClick={() => update((d) => (d.zoom = 1))}>
               重置
             </button>
           </div>
         </Row>
         <Row label="界面尺寸" desc="只放大标题栏、标签栏、状态栏和各种面板，终端文字不变">
-          <Slider label="界面尺寸" value={s.uiScale} min={LIMITS.uiScale.min} max={LIMITS.uiScale.max} step={0.05} format={pct} onChange={(v) => update((d) => (d.uiScale = v))} />
+          <Stepper label="界面尺寸" value={s.uiScale} min={LIMITS.uiScale.min} max={LIMITS.uiScale.max} step={0.05} scale={100} unit="%" onChange={(v) => update((d) => (d.uiScale = v))} />
         </Row>
         <Row label="终端字号" desc={`只调终端里的文字，界面不变。在终端里按住 Ctrl 滚动滚轮也可以调${s.zoom !== 1 ? `（乘上整体缩放后实际是 ${effectiveFontSize(s)}px）` : ""}`}>
-          <Slider label="终端字号" value={s.font.size} min={LIMITS.fontSize.min} max={LIMITS.fontSize.max} step={0.5} format={(v) => `${v}px`} onChange={(v) => update((d) => (d.font.size = v))} />
+          <Stepper label="终端字号" value={s.font.size} min={LIMITS.fontSize.min} max={LIMITS.fontSize.max} step={0.5} digits={1} unit="px" onChange={(v) => update((d) => (d.font.size = v))} />
         </Row>
       </Group>
       <Group title="终端字体" action={reset((d) => (d.font = { ...DEFAULTS.font, size: d.font.size }))}>
@@ -377,7 +377,7 @@ function FontAndZoom({ s, update, reset }: { s: AppSettings; update: Update; res
           <TextInput label="字体回退链" mono value={s.font.family} onCommit={(v) => update((d) => (d.font.family = v.trim() || DEFAULTS.font.family))} />
         </Row>
         <Row label="行高">
-          <Slider label="行高" value={s.font.lineHeight} min={LIMITS.lineHeight.min} max={LIMITS.lineHeight.max} step={0.05} format={(v) => v.toFixed(2)} onChange={(v) => update((d) => (d.font.lineHeight = v))} />
+          <Stepper label="行高" value={s.font.lineHeight} min={LIMITS.lineHeight.min} max={LIMITS.lineHeight.max} step={0.05} digits={2} onChange={(v) => update((d) => (d.font.lineHeight = v))} />
         </Row>
         <Row label="字重">
           <Segmented
@@ -422,8 +422,8 @@ function TerminalSection({ s, update, reset }: { s: AppSettings; update: Update;
         <Row label="平滑滚动" desc="鼠标滚轮滚动时带一点缓动">
           <Toggle label="平滑滚动" value={t.smoothScrollMs > 0} onChange={(v) => set("smoothScrollMs")(v ? 120 : 0)} />
         </Row>
-        <Row label="自动加深浅色文字" desc="程序输出了在当前背景上看不清的颜色时，自动加深到这个对比度。1 表示不处理">
-          <Slider label="最低对比度" value={t.minimumContrastRatio} min={1} max={7} step={0.5} format={(v) => (v <= 1 ? "关闭" : `${v}:1`)} onChange={set("minimumContrastRatio")} />
+        <Row label="自动加深看不清的文字" desc="程序输出了在当前背景上看不清的颜色时，自动加深到这个对比度。1 表示不处理。设太高会让联想提示和正文一样深，难以分辨">
+          <Stepper label="最低对比度" value={t.minimumContrastRatio} min={1} max={7} step={0.5} digits={1} unit=": 1" onChange={set("minimumContrastRatio")} />
         </Row>
       </Group>
       <Group title="复制与粘贴" action={reset((d) => Object.assign(d.terminal, { rightClick: DEFAULTS.terminal.rightClick, copyOnSelect: DEFAULTS.terminal.copyOnSelect, copyToast: DEFAULTS.terminal.copyToast, confirmMultilinePaste: DEFAULTS.terminal.confirmMultilinePaste, trimTrailingWhitespace: DEFAULTS.terminal.trimTrailingWhitespace }))}>
@@ -455,15 +455,15 @@ function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; res
       <Row label="位置">
         <Segmented label="标签栏位置" value={s.tabs.position} options={[{ value: "left", label: "左侧" }, { value: "top", label: "顶部" }]} onChange={(v) => update((d) => (d.tabs.position = v))} />
       </Row>
-      <Row label="侧栏宽度" desc="也可以直接拖动侧栏右边缘；拖到很窄会收起，双击边缘切换">
-        <Slider
+      <Row label="侧栏宽度" desc="52 表示收起。也可以直接拖动侧栏右边缘，双击边缘切换收起和展开">
+        <Stepper
           label="侧栏宽度"
-          value={s.tabs.sidebar.width <= SIDEBAR.collapsed ? SIDEBAR.collapsed : s.tabs.sidebar.width}
+          value={s.tabs.sidebar.width}
           min={SIDEBAR.collapsed}
           max={SIDEBAR.max}
-          step={4}
-          format={(v) => (v <= SIDEBAR.collapsed ? "收起" : `${v}px`)}
-          onChange={(v) => update((d) => (d.tabs.sidebar.width = v < SIDEBAR.min ? (v < SIDEBAR.snapBelow ? SIDEBAR.collapsed : SIDEBAR.min) : v))}
+          step={8}
+          unit="px"
+          onChange={(v) => update((d) => (d.tabs.sidebar.width = v < SIDEBAR.min ? (v < d.tabs.sidebar.width ? SIDEBAR.collapsed : SIDEBAR.min) : v))}
         />
       </Row>
       <Row label="窗口变窄时自动收起侧栏" desc="窗口宽度不够时先收起侧栏，保证终端至少 80 列">
@@ -477,18 +477,24 @@ function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; res
 
 function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; backend: Backend }) {
   const [diag, setDiag] = useState<Diagnostics | null>(null);
+  const [stats, setStats] = useState<SessionStats | null>(null);
   const tab = useStore((st) => st.tabs.find((t) => t.id === st.activeId));
   useEffect(() => {
     backend.diagnostics().then(setDiag).catch(() => setDiag(null));
-  }, [backend, s.shell]);
+    if (tab) backend.sessionStats(tab.id).then(setStats).catch(() => setStats(null));
+  }, [backend, s.shell, tab?.id]);
   const integrated = tab && tab.shellState !== "unknown";
+  const reason = diagnose(integrated, stats, diag);
   const lines = diag
     ? [
         ["mooncli 版本", diag.appVersion],
-        ["系统", diag.os],
+        ["系统", `${diag.os}${diag.osVersion ? ` ${diag.osVersion}` : ""}`],
         ["PowerShell", diag.shellPath ?? "没有找到"],
         ["shell 集成", diag.integrationEnabled ? "已开启" : "已关闭"],
         ["当前标签页", integrated ? "已集成" : "未集成"],
+        ...(stats
+          ? [["收到的集成标记", `本机 ${stats.trustedMarks} · 其它 ${stats.untrustedMarks} · 私有消息 ${stats.privateMessages} · 输出 ${Math.round(stats.outputBytes / 1024)} KB`]]
+          : []),
         ["ConPTY", diag.bundledConpty ? "使用附带的新版" : "使用系统自带"],
         ["设置文件", diag.settingsPath],
         ["历史库", `${diag.historyPath}${diag.historyCount !== null ? `（${diag.historyCount} 条）` : ""}`],
@@ -508,6 +514,12 @@ function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; 
         <Row label="shell 集成" desc="让 mooncli 知道提示符、命令、目录和退出码。关掉后终端照常可用，但没有智能功能。新开的标签页生效">
           <Toggle label="shell 集成" value={s.shell.integration} onChange={(v) => update((d) => (d.shell.integration = v))} />
         </Row>
+        <Row label="配色跟随主题" desc="把 PSReadLine 和 PowerShell 自带的配色换成跟随主题的颜色，让输入的文字和灰色联想提示分得清。只替换你没改过的颜色。新开的标签页生效">
+          <Toggle label="配色跟随主题" value={s.shell.adaptColors} onChange={(v) => update((d) => (d.shell.adaptColors = v))} />
+        </Row>
+        <Row label="使用附带的 ConPTY" desc="用安装包里附带的新版 ConPTY，老版本 Windows 自带的会吞掉集成标记。重启 mooncli 生效">
+          <Toggle label="使用附带的 ConPTY" value={s.shell.useBundledConpty} onChange={(v) => update((d) => (d.shell.useBundledConpty = v))} />
+        </Row>
       </Group>
       <Group
         title="诊断"
@@ -526,11 +538,7 @@ function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; 
           </button>
         }
       >
-        {!integrated && tab && (
-          <div className="set-hint">
-            当前标签页没有收到 shell 集成的信号。可能的原因：shell 集成被关闭；启动参数里加了会跳过集成的选项；pwsh 版本太旧（需要 7.2 以上）。新开一个标签页看看，提示符上方如果出现黄色的"shell 集成没有加载成功"，把那句话发给开发者。
-          </div>
-        )}
+        {!integrated && tab && <div className="set-hint">{reason}</div>}
         <dl className="diag">
           {lines.map(([k, v]) => (
             <div key={k}>
@@ -542,6 +550,21 @@ function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; 
       </Group>
     </>
   );
+}
+
+/** 根据收到的信号推断"未集成"的原因 */
+export function diagnose(integrated: boolean | undefined, stats: SessionStats | null, diag: Diagnostics | null): string {
+  if (integrated) return "";
+  if (diag && !diag.integrationEnabled) return "shell 集成在上面被关掉了。打开后新开一个标签页生效。";
+  if (!stats || stats.outputBytes === 0) return "当前标签页还没有任何输出，稍等一下再看。";
+  if (stats.untrustedMarks > 0 && stats.trustedMarks === 0)
+    return "收到了集成标记，但不是本机 pwsh 发出的（可能是在里面又启动了一个 shell，或者 ssh 到了远程）。新开一个标签页看看。";
+  if (stats.trustedMarks === 0 && stats.privateMessages === 0) {
+    if (diag && !diag.bundledConpty)
+      return "一个集成标记都没收到，而且现在用的是系统自带的 ConPTY。Windows 10 和较早的 Windows 11 自带的 ConPTY 会把这些标记吞掉。请安装附带新版 ConPTY 的安装包，或在上面打开“使用附带的 ConPTY”后重启 mooncli。";
+    return "一个集成标记都没收到。新开一个标签页，看提示符上方有没有黄色的“shell 集成没有加载成功”提示；有的话把那句话发给开发者。也可能是 pwsh 太旧（需要 7.2 以上）。";
+  }
+  return "收到过集成信号，但当前不在等待输入的状态（比如正在运行程序）。";
 }
 
 // ---- 快捷键 ----

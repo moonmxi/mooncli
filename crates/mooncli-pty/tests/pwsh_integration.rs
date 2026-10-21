@@ -85,6 +85,11 @@ impl Rec {
 
 #[test]
 fn pwsh_integration_script_end_to_end() {
+    // CI 在 Windows 上先下载新版 ConPTY，再用它跑一遍（MOONCLI_TEST_CONPTY_DIR）
+    if let Some(dir) = std::env::var_os("MOONCLI_TEST_CONPTY_DIR") {
+        assert!(mooncli_pty::conpty::use_conpty_from(std::path::Path::new(&dir)), "没能用上附带的 ConPTY");
+        eprintln!("使用附带的 ConPTY：{}", std::path::Path::new(&dir).display());
+    }
     let Some(shell) = find_shell(None).filter(|s| s.kind == ShellKind::Pwsh) else {
         eprintln!("没找到 pwsh，跳过");
         return;
@@ -95,6 +100,7 @@ fn pwsh_integration_script_end_to_end() {
         // -NoProfile：测试不受本机 profile 影响
         extra_args: &["-NoProfile".to_string()],
         integration: true,
+        adapt_colors: true,
         session_id: "it",
         cwd: Some(tmp.display().to_string()),
         cols: 120,
@@ -116,6 +122,14 @@ fn pwsh_integration_script_end_to_end() {
     rec.wait("作用域检查结束", |r| !r.finished().is_empty());
     assert!(String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("CLEAN"));
     assert!(!String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("LEAK"));
+    rec.updates.lock().unwrap().clear();
+    // 配色适配：普通文字、参数、命令、数字、联想提示都换成了跟随主题的颜色（逐项检查，防止某一项写错名字导致整组失败）
+    s.write(
+        b"$o = Get-PSReadLineOption; $x = [char]27; if ($o.DefaultTokenColor -eq \"$x[39m\" -and $o.ParameterColor -eq \"$x[36m\" -and $o.CommandColor -eq \"$x[34m\" -and $o.NumberColor -eq \"$x[33m\" -and $o.InlinePredictionColor -eq \"$x[90;3m\") { 'ADA'+'PTED' }\r",
+    )
+    .unwrap();
+    rec.wait("配色检查结束", |r| !r.finished().is_empty());
+    assert!(String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("ADAPTED"), "PSReadLine 配色没有被适配");
     rec.updates.lock().unwrap().clear();
     // 私有序列不应该出现在显示的输出里
     assert!(!String::from_utf8_lossy(&rec.out.lock().unwrap()).contains("6973"));

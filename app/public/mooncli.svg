@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="moon" x1="0.1" y1="0.15" x2="0.75" y2="0.95">
+      <stop offset="0" stop-color="#93A6DD"/>
+      <stop offset="1" stop-color="#4A5E9A"/>
+    </linearGradient>
+    <mask id="bite">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <circle cx="668" cy="362" r="318" fill="#000"/>
+    </mask>
+  </defs>
+  <!-- 新月：大圆减去右上方的圆 -->
+  <circle cx="452" cy="572" r="432" fill="url(#moon)" mask="url(#bite)"/>
+  <!-- 月牙开口处的小终端 -->
+  <g transform="translate(566 74)">
+    <rect x="0" y="0" width="420" height="330" rx="84" fill="#2C3552" stroke="#FAF8F3" stroke-width="36"/>
+    <path d="M100 116 L186 168 L100 220" fill="none" stroke="#FAF8F3" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M222 232 H326" fill="none" stroke="#FAF8F3" stroke-width="42" stroke-linecap="round"/>
+  </g>
+</svg>

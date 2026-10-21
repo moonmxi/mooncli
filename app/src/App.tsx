@@ -164,6 +164,23 @@ export function App() {
     useUi.getState().showNotice(`终端字号 ${useSettings.getState().settings.font.size}`);
   }, []);
 
+  // 命令面板、设置、右键菜单关掉后，把键盘焦点还给当前终端，否则接着敲的字会丢
+  useEffect(
+    () =>
+      useUi.subscribe((now, before) => {
+        const wasOpen = before.paletteOpen || before.settings.open || !!before.menu;
+        const isOpen = now.paletteOpen || now.settings.open || !!now.menu;
+        if (wasOpen && !isOpen) {
+          requestAnimationFrame(() => {
+            // 改名输入框等自己拿了焦点的元素不抢
+            if (document.activeElement && document.activeElement.matches("input, textarea:not(.xterm-helper-textarea)")) return;
+            getTerminal(useStore.getState().activeId ?? "")?.term.focus();
+          });
+        }
+      }),
+    [],
+  );
+
   // 第一个标签页：等设置读完再开，这样 shell 路径、集成开关等设置能生效
   const started = useRef(false);
   useEffect(() => {
