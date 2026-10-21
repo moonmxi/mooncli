@@ -1,0 +1,16 @@
+[package]
+name = "mooncli-history"
+description = "命令历史库：记录、敏感命令过滤、导入 PSReadLine 历史、模糊搜索和排序"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+nucleo-matcher.workspace = true
+regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "mooncli-pty"
+description = "伪终端会话：在 Windows 上通过 ConPTY 启动 pwsh，输出攒批、流量控制、改尺寸"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+mooncli-protocol.workspace = true
+thiserror.workspace = true
+getrandom.workspace = true

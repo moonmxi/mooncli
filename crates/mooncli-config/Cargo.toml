@@ -1,0 +1,14 @@
+[package]
+name = "mooncli-config"
+description = "设置与主题：读取带注释的 JSON、主题继承、组件色推导、对比度检查"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "mooncli-protocol"
+description = "终端输出里的 shell 集成标记解析、会话状态机和标题清理"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true

@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# 本地只想跑库测试时，不用编译 Tauri 主程序
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/moonmxi/mooncli"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+regex = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+nucleo-matcher = "0.3"
+portable-pty = "0.9"
+getrandom = "0.4"
+tempfile = "3"
+mooncli-protocol = { path = "crates/mooncli-protocol" }
+mooncli-history = { path = "crates/mooncli-history" }
+mooncli-config = { path = "crates/mooncli-config" }
+mooncli-pty = { path = "crates/mooncli-pty" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
