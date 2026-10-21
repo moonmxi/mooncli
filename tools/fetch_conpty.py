@@ -13,6 +13,9 @@ import sys
 import urllib.request
 import zipfile
 
+# Windows 上 Python 默认用系统代码页输出，打印中文会报错
+sys.stdout.reconfigure(encoding="utf-8")
+
 VERSION = "1.25.260930003"
 SHA256 = "02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee"
 ARCH = "x64"

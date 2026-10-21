@@ -8,6 +8,9 @@ import sys
 
 from contrast_rules import ANSI_ALL, ROOT, RULES, ratio, range_for
 
+# Windows 上 Python 默认用系统代码页输出，打印中文会报错
+sys.stdout.reconfigure(encoding="utf-8")
+
 THEMES = ROOT / "design" / "themes"
 
 

@@ -4,6 +4,10 @@
 """
 import json
 import pathlib
+import sys
+
+# Windows 上 Python 默认用系统代码页输出，打印中文会报错
+sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 src = (ROOT / "design/mockup/index.src.html").read_text(encoding="utf-8")

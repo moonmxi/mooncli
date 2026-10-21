@@ -9,8 +9,12 @@
 """
 import colorsys
 import json
+import sys
 
 from contrast_rules import ANSI_ALL, CHROMATIC, ROOT, RULES, base_name, hexs, hue, hue_dist, ratio, range_for, rgb
+
+# Windows 上 Python 默认用系统代码页输出，打印中文会报错
+sys.stdout.reconfigure(encoding="utf-8")
 
 
 def rotate_away(color: str, accent_h: float, degrees: float, others: list[float]) -> str:
