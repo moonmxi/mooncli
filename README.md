@@ -2,21 +2,59 @@
 
 # mooncli
 
-一个为 Windows 做的第三方终端，底层跑 PowerShell 7（pwsh）。
+**一个为 Windows 做的第三方终端，底层跑 PowerShell 7（pwsh）。**
 
-它想解决的事情很简单：**好看（尤其是浅色）、记得住命令、用着顺手、看得懂每个标签页里在干什么**。
+好看（尤其是浅色）、记得住命令、用着顺手、看得懂每个标签页里在干什么——尤其是当标签页里跑的是 Claude Code、Codex 这类 Agent 的时候。
 
-> 当前状态：早期开发中，日常能用，智能功能陆续加入。进度见 [docs/09](docs/09-roadmap.md#当前进度)。
->
-> **下载**：[mooncli-setup-x64.exe](https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe)（每次推送自动更新的预览版）。正式版本在 [Releases](https://github.com/moonmxi/mooncli/releases) 页面，正在申请 SignPath 的开源免费签名，签好之前 Windows 可能会提示"未知发布者"，见 [docs/10](docs/10-release.md) 和下面的[代码签名政策](#代码签名政策--code-signing-policy)。
+*A Windows terminal for the AI-agent era: PowerShell 7 core, light-first themes, a memory for your commands, and tabs that understand what your coding agents are doing.* → [English README](README.en.md)
 
-## 主要特点（计划中）
+[![Release](https://img.shields.io/github/v/release/moonmxi/mooncli)](https://github.com/moonmxi/mooncli/releases)
+[![CI](https://github.com/moonmxi/mooncli/actions/workflows/ci.yml/badge.svg)](https://github.com/moonmxi/mooncli/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/moonmxi/mooncli)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows-blue)
 
-- **浅色优先的外观系统**：内置 4 套浅色主题 + 1 套深色主题，颜色全部过了对比度检查；字体、配色、背景图、窗口材质（Mica / 亚克力）都能改。
-- **命令记忆**：自带历史库，记录命令在哪个目录、哪台主机、成没成功、跑了多久；`Ctrl+Shift+R` 打开历史面板，可按目录、标签页、收藏、成败、主机筛选，可去重，也能唤出"当前输了一半的命令"的所有候选，并可把候选面板常驻在侧边。
-- **流畅的手感**：GPU 渲染、平滑滚动、智能复制粘贴；ssh 到远程后按键原样透传，TAB 补全不会失灵；连上服务器就算这条命令完成，之后在服务器上执行的每条命令也会单独计时、记进历史。
-- **会看内容的标签页**：标签栏可放左侧或顶部；自动显示目录、正在跑的程序；沿用 Claude Code / Codex 自己设置的标题和对应图标；Agent 等你确认时标签会提醒。
-- **Agent 用量小窗**：用 Claude Code 和 Codex 官方提供的扩展点和它们自己写在本机的数据，实时显示 5 小时额度、周额度和上下文占用。
+[下载正式版 v0.1.0](https://github.com/moonmxi/mooncli/releases/tag/v0.1.0) · [预览版 nightly](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [文档](docs/README.md)
+
+## 截图
+
+![月白主题：标签页采用了 Claude Code 会话的标题，Agent 正在等你确认](docs/images/hero.png)
+
+_标签页会自动采用 Agent 会话的标题和图标；Agent 等你确认时，标签上有提醒。_
+
+![历史面板：按目录、主机、成败筛选，还能看每条命令的统计](docs/images/history-panel.png)
+
+![设置：五套主题都过了对比度检查，背景图、字体、缩放都能调](docs/images/settings.png)
+
+![夜航：唯一的深色主题](docs/images/theme-dark.png)
+
+_截图出自浏览器演示模式（模拟 shell）；桌面版界面相同，跑的是真 pwsh。_
+
+## 主要特点
+
+### 已经能用的（v0.1.0）
+
+- **浅色优先的外观系统**：内置五套主题——月白、霜蓝、樱晨、青瓷（浅色）和夜航（深色），颜色全部过了对比度检查；背景图（四张内置 + 自己导入）、字体、界面缩放都能改，也能跟随系统深浅色。
+- **命令记忆**：自带历史库，记录命令在哪个目录、哪台主机、成没成功、跑了多久；`Ctrl+Shift+R` 打开历史面板，可按目录、标签页、收藏、成败、主机筛选，看详情和统计。
+- **流畅的手感**：GPU 渲染、平滑滚动、智能复制粘贴、复制提醒、多行粘贴确认；ssh 到远程后按键原样透传，TAB 补全不会失灵；连上服务器就算这条命令完成，之后在服务器上执行的每条命令单独计时、记进历史。
+- **会看内容的标签页**：标签栏可放左侧或顶部；自动显示目录、正在跑的程序；沿用 Claude Code / Codex 自己设置的标题和对应图标，Agent 等你确认时标签会提醒。
+- **快捷键全可自定义**：每个操作都能改、能录，有冲突提示，带两套预设；`Ctrl+Shift+P` 打开命令面板。
+- **数据在自己手里**：设置每天自动备份、可恢复，整体可导出/导入；没装 PowerShell 7 时打开就是安装引导，不会悄悄换成 5.1 将就。
+
+### 还在做的
+
+- 窗口材质（Mica / 亚克力）、主题编辑器、配色导入
+- 补全面板、常驻候选面板、命令块装饰
+- Agent 用量小窗：实时显示 Claude Code / Codex 的 5 小时额度、周额度和上下文占用
+- 进程树识别
+
+进度以 [docs/09](docs/09-roadmap.md#当前进度) 为准。
+
+## 下载
+
+- **正式版**：[Releases 页面](https://github.com/moonmxi/mooncli/releases)里的 v0.1.0，下载 `mooncli-setup-x64.exe` 直接运行安装。
+- **预览版（nightly）**：[同页](https://github.com/moonmxi/mooncli/releases/tag/nightly)的 `mooncli-setup-x64.exe`，每次推送 main 自动更新，想尝鲜或帮忙测试用这个。
+
+安装包目前**没有代码签名**，Windows 可能会提示"未知发布者"：在提示框点 **更多信息 → 仍要运行** 即可。为什么没签、之后怎么打算，见下面的[代码签名政策](#代码签名政策--code-signing-policy)和 [docs/10](docs/10-release.md)。
 
 ## 文档
 
@@ -46,21 +84,20 @@ pnpm install
 pnpm tauri dev      # 启动真正的应用
 pnpm dev            # 只在浏览器里打开界面（用模拟 shell，方便调界面），http://localhost:1420
 pnpm test           # 界面逻辑测试
-cd ..
-cargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑集成脚本的端到端测试
+cd ..\ncargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑集成脚本的端到端测试
 ```
 
 | 目录 | 内容 |
 | --- | --- |
 | `crates/mooncli-protocol` | 识别输出里的 shell 集成标记、会话状态机（按键归属）、标题清理 |
 | `crates/mooncli-history` | 命令历史库：过滤、导入、模糊搜索和排序 |
-| `crates/mooncli-config` | 设置和主题：带注释 JSON、主题继承、组件色、对比度检查 |
+| `crates/mooncli-config` | 设置与主题：带注释 JSON、主题继承、组件色、对比度检查 |
 | `crates/mooncli-pty` | 伪终端会话（Windows 上是 ConPTY）、查找和启动 pwsh |
 | `app/src-tauri` | Tauri 主程序：把上面几块接起来，提供给界面调用 |
 | `app/src` | 界面：标签栏、终端、状态栏、布局规则 |
 | `shell/pwsh/MoonCli.ps1` | pwsh 集成脚本 |
 
-每次推送，GitHub Actions 会在 Windows 上编译、测试并打出安装包，直接发到 Release 页的 `nightly` 预发布版。
+每次推送，GitHub Actions 会在 Windows 上编译、测试并打出安装包，直接发到 Release 页的 `nightly` 预发布版；推 `v*` 标签则发正式版本。参与开发见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 设计资源
 
@@ -73,7 +110,7 @@ cargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑�
 
 ## 代码签名政策 / Code signing policy
 
-正式版本的安装包计划由 SignPath 免费签名（开源项目计划，申请中）：
+**现状：安装包暂未签名。** 2026-10 向 SignPath Foundation 申请了开源免费签名，未获批准——对方要求项目先有一定的公开知名度（stars、外部文章与讨论等信号）。攒够信号后会重新申请；获批后，正式版本将由 SignPath 免费签名，下面的条款即为届时的签名政策：
 
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
