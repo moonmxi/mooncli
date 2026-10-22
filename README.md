@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/github/license/moonmxi/mooncli)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 
-[下载正式版 v0.2.0](https://github.com/moonmxi/mooncli/releases/tag/v0.2.0) · [预览版 nightly](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [文档](docs/README.md)
+[下载正式版 v0.1.1](https://github.com/moonmxi/mooncli/releases/tag/v0.1.1) · [预览版 nightly](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [文档](docs/README.md)
 
 ## 截图
 
@@ -35,7 +35,7 @@ _截图出自浏览器演示模式（模拟 shell）；桌面版界面相同，�
 
 ## 主要特点
 
-### 已经能用的（v0.2.0）
+### 已经能用的（v0.1.1）
 
 - **浅色优先的外观系统**：内置五套主题——月白、霜蓝、樱晨、青瓷（浅色）和夜航（深色），颜色全部过了对比度检查；背景图（四张内置 + 自己导入）、字体、界面缩放都能改，也能跟随系统深浅色。
 - **命令记忆**：自带历史库，记录命令在哪个目录、哪台主机、成没成功、跑了多久；`Ctrl+Shift+R` 打开历史面板，可按目录、标签页、收藏、成败、主机筛选，看详情和统计。
@@ -55,7 +55,7 @@ _截图出自浏览器演示模式（模拟 shell）；桌面版界面相同，�
 
 ## 下载
 
-- **正式版**：[Releases 页面](https://github.com/moonmxi/mooncli/releases)里的 v0.2.0，下载 `mooncli-setup-x64.exe` 直接运行安装。
+- **正式版**：[Releases 页面](https://github.com/moonmxi/mooncli/releases)里的 v0.1.1，下载 `mooncli-setup-x64.exe` 直接运行安装。
 - **预览版（nightly）**：[同页](https://github.com/moonmxi/mooncli/releases/tag/nightly)的 `mooncli-setup-x64.exe`，每次推送 main 自动更新，想尝鲜或帮忙测试用这个。
 
 安装包目前**没有代码签名**，Windows 可能会提示"未知发布者"：在提示框点 **更多信息 → 仍要运行** 即可。

@@ -2,7 +2,7 @@
 
 在 mooncli 里直接看 Codex 的用量：当前会话的上下文占用、账号的 5 小时 / 周额度还剩多少、这一轮跑完没有。不用切窗口，不用敲 `/status`。
 
-> 范围说明：本功能只做 Codex。Claude Code 的同类数据（statusLine `rate_limits` 等）前期调研过，结论存档在本文附录；产品决定先不做，v0.2.0 起代码里只保留 Codex 一条线。
+> 范围说明：本功能只做 Codex。Claude Code 的同类数据（statusLine `rate_limits` 等）前期调研过，结论存档在本文附录；产品决定先不做，v0.1.1 起代码里只保留 Codex 一条线。
 
 ## 1. 合规边界（先说死）
 

@@ -13,7 +13,7 @@ Good-looking (especially in light themes), able to remember your commands, pleas
 [![License](https://img.shields.io/github/license/moonmxi/mooncli)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 
-[Download v0.2.0](https://github.com/moonmxi/mooncli/releases/tag/v0.2.0) · [Nightly builds](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [Docs](docs/README.md) (Chinese)
+[Download v0.1.1](https://github.com/moonmxi/mooncli/releases/tag/v0.1.1) · [Nightly builds](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [Docs](docs/README.md) (Chinese)
 
 ## Screenshots
 
@@ -35,7 +35,7 @@ _Screenshots were captured in the browser demo mode (mock shell). The desktop ap
 
 ## Features
 
-### Available now (v0.2.0)
+### Available now (v0.1.1)
 
 - **Light-first appearance system**: five built-in themes — Moon Paper, Frost, Sakura Dawn, Celadon (light) and Night Voyage (dark) — all contrast-checked. Wallpapers (four built in, or import your own), fonts, UI scaling, and follow-system light/dark mode.
 - **Command memory**: a history library that records where and on which host each command ran, whether it succeeded, and how long it took. `Ctrl+Shift+R` opens the history panel with filters (directory, tab, favorites, success/failure, host), details, and statistics. Commands run over ssh are recorded and timed individually too.
@@ -55,7 +55,7 @@ Progress is tracked in [docs/09](docs/09-roadmap.md) (Chinese).
 
 ## Download
 
-- **Stable**: v0.2.0 on the [Releases page](https://github.com/moonmxi/mooncli/releases) — download `mooncli-setup-x64.exe` and run it.
+- **Stable**: v0.1.1 on the [Releases page](https://github.com/moonmxi/mooncli/releases) — download `mooncli-setup-x64.exe` and run it.
 - **Nightly**: on the [same page](https://github.com/moonmxi/mooncli/releases/tag/nightly), rebuilt on every push to `main`.
 
 The installer is **not code-signed yet**, so Windows may warn about an "unknown publisher": click **More info → Run anyway**.
