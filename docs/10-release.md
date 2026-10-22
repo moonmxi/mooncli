@@ -45,7 +45,7 @@ SignPath 的条件（[signpath.org/terms](https://signpath.org/terms)）和仓�
 ### 需要你来做的
 
 1. **确认 GitHub 已开启两步验证**（Settings → Password and authentication）。
-2. **先发一个正式版本**：在 `main` 上打标签并推送，比如 `git tag v0.1.0 && git push origin v0.1.0`。CI 会发一个未签名的 `v0.1.0`。
+2. **先发一个正式版本**：在仓库网页上点 Releases → Draft a new release，标签填 `v0.1.0`（选"在发布时创建"），目标分支选 `main`，点 Publish。CI 会自动构建，几十分钟后把安装包补到这个发布里。也可以在命令行 `git tag v0.1.0 origin/main && git push origin v0.1.0`。
 3. **提交申请**：打开 [signpath.org/apply](https://signpath.org/apply)，填项目地址 `https://github.com/moonmxi/mooncli`、下载页（Releases 页面）、项目简介（可以直接用 README 开头那段）。审核通过后会收到 SignPath 的账号邀请。审核要多久、表格具体问什么，以实际页面为准 **【待核实】**。
 4. **在 SignPath 网页上建项目**（通过后按他们的引导做）：
    - 关联 GitHub 仓库，把 GitHub Actions 设为可信的构建系统；

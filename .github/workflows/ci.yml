@@ -162,7 +162,16 @@ jobs:
         run: |
           $file = if (Test-Path signed/mooncli-setup-x64.exe) { "signed/mooncli-setup-x64.exe" } else { "unsigned/mooncli-setup-x64.exe" }
           $note = if ($file -like "signed/*") { "安装包已签名（SignPath Foundation 免费提供的开源项目证书）。" } else { "这个版本的安装包没有签名，Windows 可能会提示“未知发布者”。" }
-          gh release create "${{ github.ref_name }}" $file --title "mooncli ${{ github.ref_name }}" --notes "下载 mooncli-setup-x64.exe 直接运行即可安装。`n`n$note"
+          $tag = "${{ github.ref_name }}"
+          $notes = "下载 mooncli-setup-x64.exe 直接运行即可安装。`n`n$note"
+          # 在网页上用"新建发布"创建标签时，发布已经存在：只补上安装包和说明
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $file --clobber
+            gh release edit $tag --notes $notes
+          } else {
+            gh release create $tag $file --title "mooncli $tag" --notes $notes
+          }
 
       # ---- 日常推送：直接把 .exe 发到 nightly 预发布版 ----
       # Actions 的"产物"一定会被打成 zip，所以发到 Release 页。下载地址固定：
