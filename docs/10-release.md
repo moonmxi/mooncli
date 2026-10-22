@@ -62,7 +62,7 @@ SignPath 的条件（[signpath.org/terms](https://signpath.org/terms)）和仓�
    | Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | 签名策略的短名，比如 `release-signing` |
    | Variable | `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | 可选，不填就用项目的默认制品配置 |
 
-6. 之后每次发版本：推 `v*` 标签 → CI 构建并把安装包交给 SignPath → 你在 SignPath 网页（或邮件链接）上点"批准" → CI 拿回签好的安装包发到 Release 页。CI 最多等一小时。
+6. 之后每次发版本：推 `v*` 标签（或在网页上新建发布） → CI 构建并把安装包交给 SignPath → 你在 SignPath 网页（或邮件链接）上点"批准" → CI 拿回签好的安装包发到 Release 页。CI 最多等一小时。
 
 ### 签名之后还会提醒吗
 
@@ -78,3 +78,11 @@ CI 里还保留了 **Azure Artifact Signing**（原 Trusted Signing，微软的�
 | Azure Artifact Signing | 约每月 10 美元 | 需身份验证，个人开发者能否申请取决于所在地区 **【待核实】** |
 | 普通 OV 证书 | 每年几百到上千元 | 信誉要慢慢积累 |
 | Microsoft Store | 个人开发者免费注册 **【待核实】** | 要改成 MSIX 格式并通过审核 |
+
+## 5. 已经建好的发布没有安装包怎么办
+
+在网页上新建发布时会同时创建标签，CI 会自动构建并把安装包补进去。如果那次构建失败了（比如 v0.1.0 第一次就因为发布脚本的语法错误没传上去），不用删掉重建：
+
+打开仓库的 **Actions → CI → Run workflow**，分支选 `main`，"发到哪个正式版本"填 `v0.1.0`，点运行。CI 会用 main 上最新的代码构建，把安装包传到这个发布里。版本号必须和 `app/src-tauri/tauri.conf.json` 里的一致。
+
+CI 里内嵌的 PowerShell 脚本由 `tools/check_ps_scripts.py` 在 Linux 上先检查语法。PowerShell 会把中文的弯引号 “ ” 当成字符串的引号，脚本里的中文说明请用「」或直引号。
