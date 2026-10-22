@@ -13,7 +13,7 @@ Good-looking (especially in light themes), able to remember your commands, pleas
 [![License](https://img.shields.io/github/license/moonmxi/mooncli)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 
-[Download v0.1.0](https://github.com/moonmxi/mooncli/releases/tag/v0.1.0) · [Nightly builds](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [Docs](docs/README.md) (Chinese)
+[Download v0.2.0](https://github.com/moonmxi/mooncli/releases/tag/v0.2.0) · [Nightly builds](https://github.com/moonmxi/mooncli/releases/tag/nightly) · [Docs](docs/README.md) (Chinese)
 
 ## Screenshots
 
@@ -27,11 +27,15 @@ _Tabs adopt the titles and icons of agent sessions, and flag you when an agent i
 
 ![Night Voyage: the one dark theme](docs/images/theme-dark.png)
 
+![Agent usage widget: follows the active tab, showing context usage and the 5-hour / weekly quotas](docs/images/agent-widget.png)
+
+_The agent usage widget is opt-in (off by default). It only reads the session files Codex writes locally plus its official notify extension point — never any credentials._
+
 _Screenshots were captured in the browser demo mode (mock shell). The desktop app has the same UI with a real pwsh._
 
 ## Features
 
-### Available now (v0.1.0)
+### Available now (v0.2.0)
 
 - **Light-first appearance system**: five built-in themes — Moon Paper, Frost, Sakura Dawn, Celadon (light) and Night Voyage (dark) — all contrast-checked. Wallpapers (four built in, or import your own), fonts, UI scaling, and follow-system light/dark mode.
 - **Command memory**: a history library that records where and on which host each command ran, whether it succeeded, and how long it took. `Ctrl+Shift+R` opens the history panel with filters (directory, tab, favorites, success/failure, host), details, and statistics. Commands run over ssh are recorded and timed individually too.
@@ -39,19 +43,19 @@ _Screenshots were captured in the browser demo mode (mock shell). The desktop ap
 - **Content-aware tabs**: the tab bar sits on the left or the top; tabs show the directory and the running program, adopt the titles and icons set by Claude Code / Codex sessions, and flag you when an agent is waiting for confirmation.
 - **Fully customizable shortcuts**: record your own bindings, with conflict detection and two presets. `Ctrl+Shift+P` opens the command palette.
 - **Your data stays yours**: daily automatic backups with restore, plus full export/import. If PowerShell 7 is missing, you get install guidance instead of a silent fallback to 5.1.
+- **Agent usage widget** (opt-in, off by default): a floating card that follows the active tab and shows Codex context usage, 5-hour and weekly quotas, and session state. Data comes only from the rollout session files Codex writes locally (the quota snapshots are the same data as the official /status) and the official notify extension point — no credentials are read and no network requests are made. One-click connect/disconnect in Settings, with automatic backups before any config change.
 
 ### In progress
 
 - Window materials (Mica / acrylic), a theme editor, palette import
 - A completion panel and a persistent candidate panel
-- An agent usage widget: live Claude Code / Codex 5-hour and weekly quotas, plus context usage
 - Process-tree recognition
 
 Progress is tracked in [docs/09](docs/09-roadmap.md) (Chinese).
 
 ## Download
 
-- **Stable**: v0.1.0 on the [Releases page](https://github.com/moonmxi/mooncli/releases) — download `mooncli-setup-x64.exe` and run it.
+- **Stable**: v0.2.0 on the [Releases page](https://github.com/moonmxi/mooncli/releases) — download `mooncli-setup-x64.exe` and run it.
 - **Nightly**: on the [same page](https://github.com/moonmxi/mooncli/releases/tag/nightly), rebuilt on every push to `main`.
 
 The installer is **not code-signed yet**, so Windows may warn about an "unknown publisher": click **More info → Run anyway**.

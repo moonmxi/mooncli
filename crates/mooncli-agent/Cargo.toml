@@ -1,0 +1,14 @@
+[package]
+name = "mooncli-agent"
+description = "Agent 用量数据：只读 Claude Code / Codex 自己写在本机的文件与官方扩展点（statusLine、hooks、notify）送来的数据，解析出上下文占用与额度窗口"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

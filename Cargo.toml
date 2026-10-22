@@ -5,7 +5,7 @@ members = ["crates/*", "app/src-tauri"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/moonmxi/mooncli"
@@ -25,6 +25,7 @@ mooncli-protocol = { path = "crates/mooncli-protocol" }
 mooncli-history = { path = "crates/mooncli-history" }
 mooncli-config = { path = "crates/mooncli-config" }
 mooncli-pty = { path = "crates/mooncli-pty" }
+mooncli-agent = { path = "crates/mooncli-agent" }
 
 [profile.release]
 lto = true

@@ -102,6 +102,7 @@ fn pwsh_integration_script_end_to_end() {
         integration: true,
         adapt_colors: true,
         session_id: "it",
+        agent_dir: None,
         cwd: Some(tmp.display().to_string()),
         cols: 120,
         rows: 30,

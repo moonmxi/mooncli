@@ -1,5 +1,6 @@
 //! mooncli 主程序：窗口、会话管理、设置、剪贴板、历史库。界面在 app/src/。
 
+mod agent;
 mod conpty;
 mod data;
 mod files;
@@ -83,6 +84,8 @@ fn session_create(
             .clone()
             .ok_or_else(|| format!("{NO_PWSH}: 没有找到 PowerShell 7（pwsh.exe）"))?,
     };
+    let agent_dir_string =
+        if settings.agent.enabled { agent::agent_dir(&state).display().to_string() } else { String::new() };
     let opts = if launch_mode.as_deref() == Some("installPwsh") {
         install_pwsh_launch(&shell, cwd, cols, rows)
     } else {
@@ -92,6 +95,7 @@ fn session_create(
             integration: settings.shell.integration,
             adapt_colors: settings.shell.adapt_colors,
             session_id: &id,
+            agent_dir: if settings.agent.enabled { Some(agent_dir_string.as_str()) } else { None },
             cwd,
             cols,
             rows,
@@ -604,6 +608,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             session_create,
+            agent::agent_usage,
+            agent::agent_bridge_path,
+            agent::agent_integration_status,
+            agent::agent_integration_preview,
+            agent::agent_integration_apply,
             session_write,
             session_resize,
             session_ack,

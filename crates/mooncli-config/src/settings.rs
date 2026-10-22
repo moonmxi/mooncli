@@ -23,6 +23,7 @@ pub struct Settings {
     pub shell: Shell,
     pub history: History,
     pub remote: Remote,
+    pub agent: Agent,
 }
 
 impl Default for Settings {
@@ -39,6 +40,7 @@ impl Default for Settings {
             shell: Shell::default(),
             history: History::default(),
             remote: Remote::default(),
+            agent: Agent::default(),
         }
     }
 }
@@ -287,6 +289,26 @@ impl Default for History {
 pub struct Remote {
     /// 除了内置的 ssh、sshp、mosh、wsl……之外，也按 ssh 的写法识别成连接的命令（比如自己的别名）
     pub connect_commands: Vec<String>,
+}
+
+/// Agent 用量小窗（docs/07，只做 Codex）。整个功能默认关闭；两个来源开关对应 docs/07 第 6 节。
+/// 小窗的摆放、样式等只在界面侧用得到的字段不进这个结构（设置以 JSON 原样保存，不会丢）。
+/// 旧版本写下的 receiveStatusline / receiveHooks 字段会被忽略（serde 默认跳过未知字段）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Agent {
+    /// 总开关。关时不采集、不注入 MOONCLI_AGENT_DIR，也不显示小窗
+    pub enabled: bool,
+    /// 读取会话文件（Codex rollout）
+    pub read_session_files: bool,
+    /// 接收 notify 的状态事件（bridge 写进 spool 的部分）
+    pub receive_notify: bool,
+}
+
+impl Default for Agent {
+    fn default() -> Self {
+        Self { enabled: false, read_session_files: true, receive_notify: true }
+    }
 }
 
 impl Settings {

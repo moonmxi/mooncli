@@ -37,6 +37,7 @@ const paths: Record<string, string> = {
   check: "M5 12.5l4.5 4.5L19 7.5",
   star: "M12 4l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8Z",
   trash: "M5 7h14 M10 7V5h4v2 M7 7l1 13h8l1-13",
+  gauge: "M4 15a8 8 0 1 1 16 0 M12 15l4.2-4.2 M4 19h16 M12 15h.01",
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
