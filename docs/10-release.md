@@ -34,7 +34,7 @@ SignPath 的条件（[signpath.org/terms](https://signpath.org/terms)）和仓�
 | --- | --- |
 | 开源协议（OSI 认可），所有组件都开源 | [`LICENSE`](../LICENSE) 是 MIT；附带的 Nerd Font 符号字体和 ConPTY 也是 MIT |
 | 项目在维护、已经发布过 | 仓库公开，Release 页有 `nightly` 和 `v0.1.0` 正式版本 |
-| 主页和下载页写明"代码签名政策" | README 的[代码签名政策](../README.md#代码签名政策--code-signing-policy)一节：致谢语、团队角色、批准方式 |
+| 主页和下载页写明"代码签名政策" | 2026-10-22 决定暂不展示（申请未通过，README 已移除该节）；重新申请前放回 README，内容含致谢语、团队角色、批准方式（旧版可从 git 历史找回） |
 | 隐私说明 | README 的"隐私"一节，用的是 SignPath 建议的说法，另外说明了 WebView2 的下载 |
 | 只签自己源码构建的程序，在可信的构建系统上构建 | CI 在 GitHub Actions 上构建，安装包直接从构建任务交给 SignPath |
 | 每次签名都要人工批准 | SignPath 那边设置"批准人"；所以只给正式版本签名，nightly 不签 |

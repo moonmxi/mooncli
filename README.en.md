@@ -54,7 +54,7 @@ Progress is tracked in [docs/09](docs/09-roadmap.md) (Chinese).
 - **Stable**: v0.1.0 on the [Releases page](https://github.com/moonmxi/mooncli/releases) — download `mooncli-setup-x64.exe` and run it.
 - **Nightly**: on the [same page](https://github.com/moonmxi/mooncli/releases/tag/nightly), rebuilt on every push to `main`.
 
-The installer is **not code-signed yet**, so Windows may warn about an "unknown publisher": click **More info → Run anyway**. See the code signing policy below and [docs/10](docs/10-release.md).
+The installer is **not code-signed yet**, so Windows may warn about an "unknown publisher": click **More info → Run anyway**.
 
 ## Development
 
@@ -70,18 +70,6 @@ cd ..\ncargo test          # core library tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) if you'd like to hack on it.
-
-## Code signing policy
-
-**Status: the installer is currently unsigned.** An application to SignPath Foundation's free signing program for open-source projects was not approved in October 2026 — the program requires a level of public visibility (stars, external articles and discussions) that this young project does not have yet. We will reapply once it does. When approved, release builds will be signed by SignPath under this policy:
-
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- Only installers built from this repository's source on GitHub Actions are signed, and every signing request is approved manually by the approver below.
-- Roles:
-  - Committers and reviewers: [moonmxi](https://github.com/moonmxi)
-  - Approvers: [moonmxi](https://github.com/moonmxi)
-- Nightly builds are not signed.
 
 ## Privacy
 

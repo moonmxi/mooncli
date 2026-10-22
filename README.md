@@ -54,7 +54,7 @@ _截图出自浏览器演示模式（模拟 shell）；桌面版界面相同，�
 - **正式版**：[Releases 页面](https://github.com/moonmxi/mooncli/releases)里的 v0.1.0，下载 `mooncli-setup-x64.exe` 直接运行安装。
 - **预览版（nightly）**：[同页](https://github.com/moonmxi/mooncli/releases/tag/nightly)的 `mooncli-setup-x64.exe`，每次推送 main 自动更新，想尝鲜或帮忙测试用这个。
 
-安装包目前**没有代码签名**，Windows 可能会提示"未知发布者"：在提示框点 **更多信息 → 仍要运行** 即可。为什么没签、之后怎么打算，见下面的[代码签名政策](#代码签名政策--code-signing-policy)和 [docs/10](docs/10-release.md)。
+安装包目前**没有代码签名**，Windows 可能会提示"未知发布者"：在提示框点 **更多信息 → 仍要运行** 即可。
 
 ## 文档
 
@@ -107,18 +107,6 @@ cd ..\ncargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 
 - [tools/check_contrast.py](tools/check_contrast.py)：主题对比度检查，规则在 [resources/contrast-rules.json](resources/contrast-rules.json)
 - [tools/tune_palette.py](tools/tune_palette.py)：按规则自动微调主题的 16 色
 - [tools/fetch_conpty.py](tools/fetch_conpty.py)：下载安装包附带的新版 ConPTY
-
-## 代码签名政策 / Code signing policy
-
-**现状：安装包暂未签名。** 2026-10 向 SignPath Foundation 申请了开源免费签名，未获批准——对方要求项目先有一定的公开知名度（stars、外部文章与讨论等信号）。攒够信号后会重新申请；获批后，正式版本将由 SignPath 免费签名，下面的条款即为届时的签名政策：
-
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- 只签由本仓库源码、在 GitHub Actions 上构建出来的安装包；每次签名都要由下面的"批准人"在 SignPath 上手动批准。
-- 团队角色：
-  - 提交者与审阅者（Committers and reviewers）：[moonmxi](https://github.com/moonmxi)
-  - 批准人（Approvers）：[moonmxi](https://github.com/moonmxi)
-- 每日构建（`nightly`）不签名。
 
 ## 隐私 / Privacy
 
