@@ -40,6 +40,7 @@ struct AppState {
     bundled_conpty: bool,
     os_version: String,
     data: data::DataPaths,
+    agent: Arc<agent::AgentState>,
 }
 
 impl AppState {
@@ -603,12 +604,15 @@ pub fn run() {
                 bundled_conpty,
                 os_version: os_version(),
                 data: data_paths,
+                agent: Arc::default(),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             session_create,
             agent::agent_usage,
+            agent::agent_refresh_live,
+            agent::agent_window_toggle,
             agent::agent_bridge_path,
             agent::agent_integration_status,
             agent::agent_integration_preview,

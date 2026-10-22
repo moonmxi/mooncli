@@ -27,6 +27,9 @@ interface UiState {
   /** 设置里正在录新的快捷键：这时按键不触发任何快捷键 */
   recordingKey: boolean;
   settings: { open: boolean; section: SettingsSection };
+  /** 用户点状态栏暂时收起了浮动的用量小窗 */
+  agentHidden: boolean;
+  toggleAgentHidden(): void;
   showCopyToast(x: number, y: number, text: string): void;
   showNotice(text: string): void;
   openMenu(x: number, y: number, items: MenuEntry[]): void;
@@ -49,6 +52,10 @@ export const useUi = create<UiState>((set) => ({
   historyOpen: false,
   recordingKey: false,
   settings: { open: false, section: "appearance" },
+  agentHidden: false,
+  toggleAgentHidden() {
+    set((s) => ({ agentHidden: !s.agentHidden }));
+  },
   showCopyToast(x, y, text) {
     const lines = text.split(/\r?\n/).length;
     set({ copyToast: { id: ++seq, x, y, lines, chars: [...text].length } });

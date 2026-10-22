@@ -1,7 +1,7 @@
 // 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键、数据与备份。改动立即生效并自动保存。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bytesToBase64 } from "../../backend/base64";
-import type { Backend, Diagnostics, IntegrationAction, IntegrationStatus, SessionStats } from "../../backend/types";
+import type { Backend, Diagnostics, IntegrationAction, IntegrationStatus, IntegrationTarget, SessionStats } from "../../backend/types";
 import { SIDEBAR } from "../../layout/layout";
 import {
   DEFAULTS,
@@ -500,18 +500,56 @@ function AgentSection({ s, update, backend }: { s: AppSettings; update: Update; 
     <>
       <Group title="用量小窗">
         <Row
-          label="显示 Codex 用量小窗"
-          desc="在窗口角落浮动显示 Codex 的上下文占用和账号额度（5 小时、周）。数据只来自 Codex 自己写在本机的会话文件和它的官方扩展点 notify——不读任何登录凭证，不发网络请求（docs/07）。"
+          label="显示 Agent 用量"
+          desc="跟随当前标签页，显示 Claude Code / Codex 的上下文占用和账号额度（5 小时、周）。只用官方渠道：两者的扩展点（statusLine、hooks、notify）、Codex 自己的 app-server 接口、它们写在本机的会话文件——不读任何登录凭证（docs/07）。"
         >
-          <Toggle label="Agent 用量小窗" value={a.enabled} onChange={(v) => update((d) => (d.agent.enabled = v))} />
+          <Toggle label="Agent 用量" value={a.enabled} onChange={(v) => update((d) => (d.agent.enabled = v))} />
+        </Row>
+        <Row label="小窗位置" desc="浮动卡片可以按住标题拖动，松手吸附到最近的角；也可以放在侧栏底部。">
+          <Segmented
+            label="小窗位置"
+            value={a.widget.style}
+            options={[
+              { value: "floating", label: "浮动卡片" },
+              { value: "sidebar", label: "侧栏底部" },
+              { value: "off", label: "不显示" },
+            ]}
+            onChange={(v) => update((d) => (d.agent.widget.style = v))}
+          />
+        </Row>
+        <Row label="状态栏摘要" desc="状态栏右侧显示一段「5h 38% · 周 21%」，点击可临时收起浮动卡片。">
+          <Toggle label="状态栏摘要" value={a.widget.statusBar} onChange={(v) => update((d) => (d.agent.widget.statusBar = v))} />
+        </Row>
+        <Row label="独立小窗" desc="单独的置顶小窗口，切到别的程序时也能看到额度。命令面板里也能打开。">
+          <button type="button" className="btn" disabled={!a.enabled} onClick={() => backend.agentWindow(true).catch((e) => useUi.getState().showNotice(String(e)))}>
+            打开
+          </button>
         </Row>
       </Group>
       <Group title="数据来源">
-        <Row label="读取会话文件" desc="读 Codex 的 rollout 会话文件：上下文占用、token 用量和后端落盘的额度快照（与官方 /status 同源）都从这里来。只读，不改。">
-          <Toggle label="读取会话文件" value={a.readSessionFiles} onChange={(v) => update((d) => (d.agent.readSessionFiles = v))} />
+        <Row
+          label="实时额度（Codex）"
+          desc="每两分钟通过本机 Codex 的 app-server（Codex IDE 插件用的官方接口）查一次额度：不用等下一轮对话就是最新的。登录和联网都由 Codex 自己完成，mooncli 不碰凭证。"
+        >
+          <Toggle label="实时额度" value={a.liveQuota} onChange={(v) => update((d) => (d.agent.liveQuota = v))} />
         </Row>
-        <Row label="接收 notify 状态" desc="接入 Codex 的 notify 后（见下方），每轮结束小窗会把该会话标为「本轮已完成」并即时刷新。notify 本身不带用量数字，用量仍读会话文件。">
-          <Toggle label="接收 notify 状态" value={a.receiveNotify} onChange={(v) => update((d) => (d.agent.receiveNotify = v))} />
+        <Row label="codex 位置" desc="留空时自动在 PATH 里找（npm 装的会找到包里自带的 codex.exe）。">
+          <TextInput
+            label="codex 位置"
+            mono
+            value={a.codexPath ?? ""}
+            placeholder="自动"
+            onCommit={(v) => update((d) => (d.agent.codexPath = v.trim() || null))}
+          />
+        </Row>
+        <Row
+          label="接收扩展点数据"
+          desc="接入后（见下方）：Claude Code 的 statusLine 每次刷新都送来上下文与额度，hooks 报告「运行中 / 等你确认 / 本轮已完成」；Codex 的 notify 报告一轮结束。"
+        >
+          <Toggle label="接收扩展点数据" value={a.receiveExtensions} onChange={(v) => update((d) => (d.agent.receiveExtensions = v))} />
+        </Row>
+        <Row label="读取会话文件" desc="Codex 的 rollout 文件带额度快照（与官方 /status 同源）；Claude Code 的转录能补上下文占用。只读，不改。">
+          <Toggle label="读取会话文件" value={a.readSessionFiles} onChange={(v) => update((d) => (d.agent.readSessionFiles = v))} />
         </Row>
       </Group>
       <Group title="小窗外观">
@@ -543,9 +581,11 @@ function AgentSection({ s, update, backend }: { s: AppSettings; update: Update; 
   );
 }
 
+const TARGET_LABEL: Record<IntegrationTarget, string> = { claude: "Claude Code", codex: "Codex" };
+
 function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePath: string }) {
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
-  const [pending, setPending] = useState<{ action: IntegrationAction; changes: string[] } | null>(null);
+  const [pending, setPending] = useState<{ target: IntegrationTarget; action: IntegrationAction; changes: string[] } | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -554,20 +594,20 @@ function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePat
   };
   useEffect(refresh, [backend]);
 
-  const preview = (action: IntegrationAction) => {
+  const preview = (target: IntegrationTarget, action: IntegrationAction) => {
     setNote(null);
     backend
-      .agentIntegrationPreview(action)
-      .then((o) => setPending({ action, changes: o.changes }))
+      .agentIntegrationPreview(target, action)
+      .then((o) => setPending({ target, action, changes: o.changes }))
       .catch((e) => setNote(`预览失败：${String(e)}`));
   };
   const apply = () => {
     if (!pending) return;
     setBusy(true);
     backend
-      .agentIntegrationApply(pending.action)
+      .agentIntegrationApply(pending.target, pending.action)
       .then((o) => {
-        setNote(`已写入（原文件已自动备份）：${o.changes.join("；")}`);
+        setNote(`${TARGET_LABEL[pending.target]}：已写入（原文件已自动备份）。${o.changes.join("；")}`);
         setPending(null);
         refresh();
       })
@@ -575,42 +615,54 @@ function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePat
       .finally(() => setBusy(false));
   };
 
-  const integrated = status?.codex;
+  const row = (target: IntegrationTarget, what: React.ReactNode, path: string | undefined) => {
+    const on = status?.[target];
+    return (
+      <Row
+        label={TARGET_LABEL[target]}
+        desc={
+          <>
+            {what}
+            <br />
+            配置文件：<code>{path ?? "读取中"}</code> · 状态：{on === undefined ? "读取中" : on ? "已接入" : "未接入"}
+          </>
+        }
+      >
+        <button type="button" className="btn" disabled={on === undefined || busy || (!on && status?.bridgeExists === false)} onClick={() => preview(target, on ? "unintegrate" : "integrate")}>
+          {on ? "断开" : "接入"}
+        </button>
+      </Row>
+    );
+  };
+
   return (
-    <Group title="接入（让状态更实时）">
+    <Group title="接入（数据更实时、更全）">
       <Row
         label="说明"
         desc={
           <>
-            不接入也能用（只读会话文件）。接入是把 Codex 的 notify 指向 mooncli-bridge
+            不接入也能用（读会话文件，Codex 还有实时额度）。接入是把官方扩展点指向 mooncli-bridge
             {bridgePath ? (
               <>
                 （<code>{bridgePath}</code>）
               </>
             ) : null}
-            ：你原来的 notify 会被保存并由 bridge 原样转调，行为不变；每次写入前自动备份原文件，断开时精确恢复。
+            ：你原来的 statusLine、notify 会被保存并由 bridge 原样转调，hooks 只追加不覆盖；写入前先给你看变更清单、自动备份原文件，断开时精确恢复。
+            {status?.bridgeExists === false && <strong>（没找到 mooncli-bridge，开发版请先运行 node scripts/build-bridge.mjs）</strong>}
           </>
         }
       >
         <span />
       </Row>
-      <Row
-        label="Codex"
-        desc={
-          <>
-            notify：一轮结束时通知小窗把该会话标为「本轮已完成」（用量仍读会话文件，notify 本身不带用量）。
-            <br />
-            配置文件：<code>{status?.codexConfigPath ?? "~/.codex/config.toml"}</code> · 状态：{integrated === undefined ? "读取中" : integrated ? "已接入" : "未接入"}
-          </>
-        }
-      >
-        <button type="button" className="btn" disabled={integrated === undefined || busy} onClick={() => preview(integrated ? "unintegrate" : "integrate")}>
-          {integrated ? "断开" : "接入"}
-        </button>
-      </Row>
+      {row(
+        "claude",
+        <>statusLine 送来上下文占用和 5 小时 / 周额度（Pro / Max 订阅），hooks 报告「运行中 / 等你确认 / 本轮已完成」。没有原状态栏时，bridge 会显示一行「模型 · 上下文 · 额度」。</>,
+        status?.claudeSettingsPath,
+      )}
+      {row("codex", <>notify：一轮结束时把该会话标为「本轮已完成」并关联到标签页。额度来自实时查询和会话文件，不依赖接入。</>, status?.codexConfigPath)}
       {pending && (
         <Row
-          label={pending.action === "integrate" ? "确认接入" : "确认断开"}
+          label={`${pending.action === "integrate" ? "确认接入" : "确认断开"} ${TARGET_LABEL[pending.target]}`}
           desc={
             <ul style={{ margin: 0, paddingLeft: 16 }}>
               {pending.changes.map((ch) => (

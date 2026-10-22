@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageReport } from "../backend/types";
-import { accountFor, contextPercent, formatElapsed, formatResetIn, formatTokens, levelOf, pickSession, windowLabel } from "./usage";
+import { accountFor, compactSummary, contextPercent, formatElapsed, formatResetIn, formatTokens, levelOf, pickAccount, pickSession, windowLabel } from "./usage";
 
 describe("windowLabel", () => {
   it("认分钟数不认套餐", () => {
@@ -52,11 +52,11 @@ describe("formatElapsed", () => {
 
 const report: UsageReport = {
   sessions: [
-    { kind: "codex", sessionId: "s-old", cwd: "C:\\work\\a", state: "unknown", updatedAt: 100 },
-    { kind: "codex", sessionId: "s-tab", tabSessionId: "tab-1", cwd: "C:\\work\\b", state: "running", updatedAt: 90 },
-    { kind: "codex", sessionId: "s-dir", cwd: "c:/work/b/", state: "waiting", updatedAt: 95 },
+    { kind: "codex", sessionId: "s-old", cwd: "C:\\work\\a", state: "unknown", updatedAt: 100, source: "sessionFile" },
+    { kind: "codex", sessionId: "s-tab", tabSessionId: "tab-1", cwd: "C:\\work\\b", state: "running", updatedAt: 90, source: "sessionFile" },
+    { kind: "codex", sessionId: "s-dir", cwd: "c:/work/b/", state: "waiting", updatedAt: 95, source: "sessionFile" },
   ],
-  accounts: [{ kind: "codex", updatedAt: 90 }],
+  accounts: [{ kind: "codex", updatedAt: 90, source: "live" }],
 };
 
 describe("pickSession", () => {
@@ -81,5 +81,36 @@ describe("pickSession", () => {
   it("accountFor 找到账号用量", () => {
     expect(accountFor(report, "codex")?.kind).toBe("codex");
     expect(accountFor({ sessions: [], accounts: [] }, "codex")).toBeUndefined();
+  });
+});
+
+describe("compactSummary / pickAccount", () => {
+  const now = 1_000_000;
+  it("状态栏摘要，过期窗口按 0%", () => {
+    expect(
+      compactSummary(
+        {
+          kind: "claude",
+          primary: { usedPercent: 37.6, windowMinutes: 300, resetsAt: now - 1, estimated: false },
+          secondary: { usedPercent: 21.2, windowMinutes: 10080, resetsAt: now + 99, estimated: false },
+          updatedAt: now,
+          source: "statusLine",
+        },
+        now,
+      ),
+    ).toBe("5h 0% · 周 21%");
+    expect(compactSummary({ kind: "codex", updatedAt: now, source: "live" }, now)).toBeNull();
+    expect(compactSummary(undefined, now)).toBeNull();
+  });
+  it("没有会话时取最新的账号", () => {
+    const r: UsageReport = {
+      sessions: [],
+      accounts: [
+        { kind: "codex", updatedAt: 5, source: "live" },
+        { kind: "claude", updatedAt: 9, source: "statusLine" },
+      ],
+    };
+    expect(pickAccount(r)?.kind).toBe("claude");
+    expect(pickAccount(r, { kind: "codex" } as never)?.kind).toBe("codex");
   });
 });

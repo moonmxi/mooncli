@@ -4,9 +4,9 @@
   "version": "0.1.1",
   "identifier": "dev.moonmxi.mooncli",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "node scripts/build-bridge.mjs && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/build-bridge.mjs --release && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -57,6 +57,9 @@
         "sidebarImage": "icons/nsis-sidebar.bmp",
         "headerImage": "icons/nsis-header.bmp"
       }
-    }
+    },
+    "externalBin": [
+      "binaries/mooncli-bridge"
+    ]
   }
 }

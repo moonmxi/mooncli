@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口：只开放终端用到的窗口操作",
-  "windows": ["main"],
+  "description": "主窗口与独立的 Agent 用量小窗：只开放用到的窗口操作",
+  "windows": ["main", "agent"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

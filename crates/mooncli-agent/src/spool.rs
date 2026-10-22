@@ -1,6 +1,9 @@
 //! mooncli-bridge 与主进程之间的交接目录（spool）：在 mooncli 的 agent 数据目录下，
-//! bridge 把 Codex notify 送来的事件写成小 JSON 文件，主进程只读。
-//! 文件名：`codex-notify-<thread_id>.json`（该会话最近一次 notify 触发）。
+//! bridge 把扩展点送来的数据写成小 JSON 文件，主进程只读。每个会话每种来源一个文件，只留最新一份：
+//! - `claude-status-<session_id>.json`：Claude Code statusLine 的输入
+//! - `claude-hook-<session_id>.json`：Claude Code hooks 的最近一个事件
+//! - `codex-notify-<thread_id>.json`：Codex notify 的最近一次触发
+//!
 //! 每个文件的内容都是 `{ receivedAt, tabSessionId?, payload }`。
 
 use std::path::{Path, PathBuf};
@@ -18,6 +21,14 @@ pub struct SpoolEntry {
     pub tab_session_id: Option<String>,
     /// 扩展点送来的原始 JSON
     pub payload: Value,
+}
+
+pub fn claude_status_file_name(session_id: &str) -> String {
+    format!("claude-status-{}.json", sanitize(session_id))
+}
+
+pub fn claude_hook_file_name(session_id: &str) -> String {
+    format!("claude-hook-{}.json", sanitize(session_id))
 }
 
 pub fn codex_notify_file_name(thread_id: &str) -> String {
@@ -55,4 +66,18 @@ pub fn list_entries(agent_dir: &Path, prefix: &str) -> Vec<PathBuf> {
             p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix) && n.ends_with(".json"))
         })
         .collect()
+}
+
+/// 清掉很久没更新的 spool 文件（会话早就结束了），免得目录越攒越多。返回删掉的个数。
+pub fn prune(agent_dir: &Path, older_than_secs: i64, now: i64) -> usize {
+    let mut n = 0;
+    for prefix in ["claude-status-", "claude-hook-", "codex-notify-"] {
+        for path in list_entries(agent_dir, prefix) {
+            let stale = crate::timeutil::file_mtime_epoch(&path).is_some_and(|t| now - t > older_than_secs);
+            if stale && std::fs::remove_file(&path).is_ok() {
+                n += 1;
+            }
+        }
+    }
+    n
 }

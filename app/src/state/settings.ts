@@ -49,12 +49,21 @@ export interface AppSettings {
   history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean; keepDays: number };
   /** 除了内置的 ssh、mosh、wsl……之外，也当作"连接服务器"的命令（写法和 ssh 一样，比如自己的别名） */
   remote: { connectCommands: string[] };
-  /** Agent 用量小窗（docs/07，只做 Codex）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
+  /** Agent 用量小窗（docs/07，Claude Code 与 Codex）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
   agent: {
     enabled: boolean;
     readSessionFiles: boolean;
-    receiveNotify: boolean;
+    /** 接收官方扩展点的数据：Claude Code 的 statusLine / hooks、Codex 的 notify */
+    receiveExtensions: boolean;
+    /** 通过本机 Codex 的 app-server 实时查询额度 */
+    liveQuota: boolean;
+    /** codex 可执行文件的位置；null 时自动在 PATH 里找 */
+    codexPath: string | null;
     widget: {
+      /** 小窗放哪：浮动卡片 / 侧栏底部 / 不显示卡片（只留状态栏一段） */
+      style: "floating" | "sidebar" | "off";
+      /** 状态栏里显示一段额度摘要 */
+      statusBar: boolean;
       anchor: "bottom-right" | "bottom-left" | "top-right" | "top-left";
       opacity: number;
       /** 进度条变警告色 / 危险色的阈值（0–1） */
@@ -105,8 +114,10 @@ export const DEFAULTS: AppSettings = {
   agent: {
     enabled: false,
     readSessionFiles: true,
-    receiveNotify: true,
-    widget: { anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
+    receiveExtensions: true,
+    liveQuota: true,
+    codexPath: null,
+    widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
   },
   keys: {},
 };

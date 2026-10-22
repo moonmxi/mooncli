@@ -1,9 +1,11 @@
 // Agent 用量小窗的纯函数：标签文案、数字格式、给当前标签页挑会话。
 // 数据结构见 backend/types.ts（和 crates/mooncli-agent 一一对应）。
-import type { AgentAccountUsage, AgentKind, AgentSessionUsage, UsageReport } from "../backend/types";
+import type { AgentAccountUsage, AgentKind, AgentSessionUsage, SnapshotSource, UsageReport } from "../backend/types";
 import type { Tab } from "../state/store";
 
-export const KIND_LABEL: Record<AgentKind, string> = { codex: "Codex" };
+export const KIND_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+/** 状态栏等窄处用的短名 */
+export const KIND_SHORT: Record<AgentKind, string> = { claude: "Claude", codex: "Codex" };
 
 /** 窗口长度 → 显示名。认分钟数不认套餐：300 是 5 小时，10080 是一周，其它照实说。 */
 export function windowLabel(windowMinutes?: number): string {
@@ -92,4 +94,39 @@ export function pickSession(report: UsageReport, tab?: Tab): Picked | null {
 
 export function accountFor(report: UsageReport, kind: AgentKind): AgentAccountUsage | undefined {
   return report.accounts.find((a) => a.kind === kind);
+}
+
+/** 数据来源的说明文字（小窗底部的小字） */
+export function sourceLabel(source: SnapshotSource): string {
+  switch (source) {
+    case "live":
+      return "实时 · codex app-server";
+    case "statusLine":
+      return "实时 · Claude Code statusLine";
+    case "sessionFile":
+      return "会话文件里的最近记录";
+  }
+}
+
+/** 窗口过了重置点还没新数据：按已重置算 0%（官方此时也不再下发旧值） */
+export function shownPercent(w: { usedPercent: number; resetsAt?: number }, nowSec: number): number {
+  return w.resetsAt !== undefined && w.resetsAt <= nowSec ? 0 : w.usedPercent;
+}
+
+/** 状态栏的一段摘要："5h 38% · 周 21%"；两个窗口都没有时为空 */
+export function compactSummary(a: AgentAccountUsage | undefined, nowSec: number): string | null {
+  if (!a) return null;
+  const parts: string[] = [];
+  for (const w of [a.primary, a.secondary]) {
+    if (!w) continue;
+    const name = w.windowMinutes === 300 ? "5h" : w.windowMinutes === 10080 ? "周" : windowLabel(w.windowMinutes);
+    parts.push(`${name} ${Math.round(shownPercent(w, nowSec))}%`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** 当前该看哪个 Agent 的账号：跟随挑中的会话；没有会话时取最新的账号数据 */
+export function pickAccount(report: UsageReport, session?: AgentSessionUsage): AgentAccountUsage | undefined {
+  if (session) return accountFor(report, session.kind);
+  return [...report.accounts].sort((a, b) => b.updatedAt - a.updatedAt)[0];
 }

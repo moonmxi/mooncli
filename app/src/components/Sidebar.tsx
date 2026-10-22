@@ -18,9 +18,11 @@ interface Props {
   now: number;
   actions: TabActions;
   onCycleTheme(): void;
+  /** 标签列表下方、底部按钮上方的区块（Agent 用量的侧栏形态） */
+  footer?: React.ReactNode;
 }
 
-export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, actions, onCycleTheme }: Props) {
+export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, actions, onCycleTheme, footer }: Props) {
   const tabs = useStore((s) => s.tabs);
   const activeId = useStore((s) => s.activeId);
   const activate = useStore((s) => s.activate);
@@ -55,6 +57,7 @@ export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, action
           </div>
         ))}
       </div>
+      {footer && shownDensity !== "collapsed" && footer}
       <div className="side-foot">
         <button type="button" className="foot-btn" onClick={() => openSettings()} title="设置 (Ctrl+,)">
           <Icon name="gear" />

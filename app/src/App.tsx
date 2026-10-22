@@ -3,7 +3,8 @@ import { pickBackend } from "./backend";
 import { Backdrop, useBackgroundUrl, useRenderSize } from "./components/Backdrop";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
 import { HistoryPanel } from "./components/HistoryPanel";
-import { AgentWidget } from "./components/AgentWidget";
+import { AgentSidebarBlock, AgentWidget } from "./components/AgentWidget";
+import { startUsagePolling } from "./agent/store";
 import { ContextMenu } from "./components/ContextMenu";
 import { CopyToast, Notice } from "./components/CopyToast";
 import { SettingsPage } from "./components/settings/SettingsPage";
@@ -82,6 +83,10 @@ export function App() {
   }, [backend]);
 
   useEffect(() => applyTheme(theme), [theme]);
+
+  // Agent 用量：开着时才轮询（小窗、侧栏区块、状态栏一段共用这一份数据）
+  const agentOn = loaded && settings.agent.enabled;
+  useEffect(() => (agentOn ? startUsagePolling(backend) : undefined), [agentOn, backend]);
 
   useEffect(() => {
     const onResize = () => setWinWidth(window.innerWidth);
@@ -308,6 +313,18 @@ export function App() {
         keywords: ["tabs position"],
         run: () => useSettings.getState().update((d) => (d.tabs.position = d.tabs.position === "left" ? "top" : "left")),
       },
+      {
+        id: "agentwin",
+        group: "Agent",
+        label: "打开独立的用量小窗（置顶）",
+        icon: "gauge",
+        keywords: ["agent", "usage", "claude", "codex", "quota", "额度"],
+        run: () => {
+          if (!useSettings.getState().settings.agent.enabled) useSettings.getState().update((d) => (d.agent.enabled = true));
+          backend.agentWindow(true).catch((e) => useUi.getState().showNotice(String(e)));
+        },
+      },
+      { id: "agentset", group: "Agent", label: "Agent 用量设置", icon: "gauge", keywords: ["agent", "claude", "codex"], run: () => useUi.getState().openSettings("agent") },
       { id: "bg", group: "外观", label: "更换背景图", icon: "image", keywords: ["background"], run: () => useUi.getState().openSettings("appearance") },
       { id: "diag", group: "操作", label: "查看诊断信息", icon: "info", keywords: ["diagnostics", "debug"], run: () => useUi.getState().openSettings("shell") },
       ...builtinThemes.map((t) => ({
@@ -330,7 +347,7 @@ export function App() {
       });
     }
     return list;
-  }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys]);
+  }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys, backend]);
 
   const sideDocked = layout.sidebar.mode === "docked";
   const chrome = Math.round(40 * ui);
@@ -362,6 +379,7 @@ export function App() {
           now={now}
           actions={actions}
           onCycleTheme={cycleTheme}
+          footer={<AgentSidebarBlock backend={backend} />}
         />
       )}
       {layout.sidebar.drawerOpen && <div className="drawer-backdrop" onClick={() => useStore.getState().setDrawerOpen(false)} />}

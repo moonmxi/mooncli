@@ -291,23 +291,26 @@ pub struct Remote {
     pub connect_commands: Vec<String>,
 }
 
-/// Agent 用量小窗（docs/07，只做 Codex）。整个功能默认关闭；两个来源开关对应 docs/07 第 6 节。
+/// Agent 用量小窗（docs/07，Claude Code 与 Codex）。整个功能默认关闭；来源开关对应 docs/07 第 6 节。
 /// 小窗的摆放、样式等只在界面侧用得到的字段不进这个结构（设置以 JSON 原样保存，不会丢）。
-/// 旧版本写下的 receiveStatusline / receiveHooks 字段会被忽略（serde 默认跳过未知字段）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Agent {
     /// 总开关。关时不采集、不注入 MOONCLI_AGENT_DIR，也不显示小窗
     pub enabled: bool,
-    /// 读取会话文件（Codex rollout）
+    /// 读取会话文件（Codex rollout、Claude Code 转录）
     pub read_session_files: bool,
-    /// 接收 notify 的状态事件（bridge 写进 spool 的部分）
-    pub receive_notify: bool,
+    /// 接收官方扩展点送来的数据（Claude Code 的 statusLine / hooks、Codex 的 notify）
+    pub receive_extensions: bool,
+    /// 通过本机 Codex 的 app-server 实时查询额度（登录、联网都由 Codex 自己完成）
+    pub live_quota: bool,
+    /// codex 可执行文件的位置；不填时自动在 PATH 里找
+    pub codex_path: Option<String>,
 }
 
 impl Default for Agent {
     fn default() -> Self {
-        Self { enabled: false, read_session_files: true, receive_notify: true }
+        Self { enabled: false, read_session_files: true, receive_extensions: true, live_quota: true, codex_path: None }
     }
 }
 

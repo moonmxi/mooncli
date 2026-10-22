@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::jsonl::{collect_jsonl, first_line, tail_lines};
-use crate::model::{AccountUsage, AgentKind, ContextUsage, RateWindow, SessionState, SessionUsage};
+use crate::model::{AccountUsage, AgentKind, ContextUsage, RateWindow, SessionState, SessionUsage, SnapshotSource};
 use crate::spool::{list_entries, read_entry};
 use crate::timeutil::file_mtime_epoch;
 
@@ -175,6 +175,7 @@ pub fn collect(homes: &[PathBuf], agent_dir: Option<&Path>) -> (Vec<SessionUsage
                 secondary: tc.secondary.clone(),
                 plan: tc.plan.clone(),
                 updated_at,
+                source: SnapshotSource::SessionFile,
             });
         }
         if sessions.len() < MAX_SESSIONS
@@ -189,6 +190,7 @@ pub fn collect(homes: &[PathBuf], agent_dir: Option<&Path>) -> (Vec<SessionUsage
                 context: tc.context.clone(),
                 state: SessionState::Unknown,
                 updated_at,
+                source: SnapshotSource::SessionFile,
             });
         }
     }

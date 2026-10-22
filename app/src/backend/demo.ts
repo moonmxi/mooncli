@@ -8,8 +8,13 @@ const ESC = "\x1b";
 const c = (code: string, s: string) => `${ESC}[${code}m${s}${ESC}[0m`;
 
 // 演示后端的「一键接入」状态（只在内存里，刷新页面复位）
-const demoIntegration = { codex: false };
-function demoIntegrationChanges(action: "integrate" | "unintegrate"): string[] {
+const demoIntegration = { claude: false, codex: false };
+function demoIntegrationChanges(target: "claude" | "codex", action: "integrate" | "unintegrate"): string[] {
+  if (target === "claude") {
+    return action === "integrate"
+      ? ["新增 statusLine：mooncli-bridge claude-statusline（状态栏显示模型、上下文与额度）", "hooks 追加 mooncli-bridge（SessionStart、UserPromptSubmit、PermissionRequest、Notification、PostToolUse、Stop、SessionEnd），你原有的 hooks 不动"]
+      : ["settings.json 恢复成接入前的原文"];
+  }
   return action === "integrate" ? ["新增 notify：mooncli-bridge codex-notify"] : ["删除 notify（mooncli-bridge）"];
 }
 
@@ -422,44 +427,60 @@ export function demoBackend(): Backend {
       return {
         sessions: [
           {
-            kind: "codex",
-            sessionId: "demo-codex-1",
+            kind: "claude",
+            sessionId: "demo-claude-1",
             cwd: "C:\\Users\\moon\\code\\mooncli",
-            model: "gpt-5-codex",
-            context: { usedTokens: 171_500, windowTokens: 500_000 },
-            state: "running",
-            updatedAt: now - 45,
+            model: "Opus",
+            context: { usedTokens: 126_000, windowTokens: 1_000_000 },
+            state: "waiting",
+            updatedAt: now - 20,
+            source: "statusLine",
           },
           {
             kind: "codex",
-            sessionId: "demo-codex-2",
+            sessionId: "demo-codex-1",
             cwd: "C:\\Users\\moon\\code\\other-project",
             model: "gpt-5-codex",
-            context: { usedTokens: 42_000, windowTokens: 500_000 },
+            context: { usedTokens: 171_500, windowTokens: 475_000 },
             state: "done",
-            updatedAt: now - 3600,
+            updatedAt: now - 900,
+            source: "sessionFile",
           },
         ],
         accounts: [
+          {
+            kind: "claude",
+            primary: { usedPercent: 38, windowMinutes: 300, resetsAt: now + 2 * 3600 + 18 * 60, estimated: false },
+            secondary: { usedPercent: 21, windowMinutes: 10080, resetsAt: now + 4 * 86400, estimated: false },
+            updatedAt: now - 20,
+            source: "statusLine",
+          },
           {
             kind: "codex",
             primary: { usedPercent: 27, windowMinutes: 300, resetsAt: now + 3600 + 42 * 60, estimated: false },
             secondary: { usedPercent: 9, windowMinutes: 10080, resetsAt: now + 5 * 86400, estimated: false },
             plan: "plus",
-            updatedAt: now - 45,
+            updatedAt: now - 60,
+            source: "live",
           },
         ],
       } satisfies UsageReport;
     },
+    agentRefreshLive: async () => {},
+    agentWindow: async () => {},
     agentBridgePath: async () => "C:\\Program Files\\mooncli\\mooncli-bridge.exe",
     agentIntegrationStatus: async () => ({
+      claude: demoIntegration.claude,
       codex: demoIntegration.codex,
+      claudeSettingsPath: "C:\\Users\\moon\\.claude\\settings.json",
       codexConfigPath: "C:\\Users\\moon\\.codex\\config.toml",
+      codexExe: "C:\\Users\\moon\\AppData\\Roaming\\npm\\codex.exe",
+      bridgeExists: true,
     }),
-    agentIntegrationPreview: async (action) => ({ changes: demoIntegrationChanges(action) }),
-    agentIntegrationApply: async (action) => {
-      const changes = demoIntegrationChanges(action);
-      demoIntegration.codex = action === "integrate";
+    agentIntegrationPreview: async (target, action) => ({ changes: demoIntegrationChanges(target, action) }),
+    agentIntegrationApply: async (target, action) => {
+      const changes = demoIntegrationChanges(target, action);
+      demoIntegration[target] = action === "integrate";
       return { changes };
     },
     historySearch: async (text, opts) => demoQuery({ text, limit: opts?.limit ?? 50 }),

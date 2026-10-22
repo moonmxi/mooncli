@@ -1,6 +1,7 @@
 import type { Breakpoint } from "../layout/layout";
 import type { Tab } from "../state/store";
 import { useUi } from "../state/ui";
+import { StatusSegment } from "./AgentWidget";
 
 const STATE_LABEL: Record<Tab["shellState"], string> = {
   unknown: "未集成",
@@ -60,6 +61,7 @@ export function StatusBar({ tab, bp, size, backendKind, zoom }: Props) {
       {bp !== "sm" && <span>UTF-8</span>}
       {bp !== "sm" && <span>{size}</span>}
       <span className="r">
+        <StatusSegment />
         {zoom !== 1 && <span title="整体缩放，Ctrl+0 恢复">{Math.round(zoom * 100)}%</span>}
         {backendKind === "demo" && <span>演示后端</span>}
       </span>
