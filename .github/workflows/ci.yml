@@ -187,8 +187,9 @@ jobs:
       # ---- 日常推送：直接把 .exe 发到 nightly 预发布版 ----
       # Actions 的"产物"一定会被打成 zip，所以发到 Release 页。下载地址固定：
       #   https://github.com/<owner>/<repo>/releases/download/nightly/mooncli-setup-x64.exe
+      # 只由 main 发布：几个分支同时推送时一起删建 nightly 会互相冲突
       - name: 发布到 nightly 预发布版
-        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

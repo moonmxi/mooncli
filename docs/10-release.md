@@ -4,7 +4,7 @@
 
 | 版本 | 怎么来的 | 地址 | 签名 |
 | --- | --- | --- | --- |
-| 预览版（nightly） | 每次推送分支自动构建，替换成最新的一份 | `https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe` | 不签 |
+| 预览版（nightly） | 每次推送 main 自动构建，替换成最新的一份（其它分支只构建、测试，不发布） | `https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe` | 不签 |
 | 正式版本 | 推 `v0.2.0` 这样的标签时构建 | [Releases 页面](https://github.com/moonmxi/mooncli/releases) | SignPath 配好后自动签 |
 
 两种都是直接发到 GitHub 的 **Release 页**的 `.exe`，不经过 Actions 的"产物"（那里的文件一定会被打成 zip）。
