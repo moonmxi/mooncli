@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { SIDEBAR, dragPreview, dragWidth, keyboardWidth, releaseWidth, toggleCollapsed, type Density } from "../layout/layout";
 import { useSettings } from "../state/settings";
-import { orderedTabs, useStore, type Tab } from "../state/store";
+import { listView, orderedTabs, useStore, type Tab } from "../state/store";
 import { displayTitle, metaLine } from "../state/title";
 import { useUi } from "../state/ui";
 import { Icon, kindIcon } from "./Icons";
@@ -53,7 +53,7 @@ export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, action
       <div className="tabs-scroll" role="tablist" aria-orientation="vertical">
         {orderedTabs(tabs).map((t, i) => (
           <div key={t.id} className={i === pinnedCount - 1 && pinnedCount < tabs.length ? "pin-divider" : undefined}>
-            <TabItem tab={t} active={t.id === activeId} density={shownDensity} now={now} onClick={() => activate(t.id)} actions={actions} />
+            <TabItem tab={listView(tabs, t)} active={t.id === activeId} density={shownDensity} now={now} onClick={() => activate(t.id)} actions={actions} />
           </div>
         ))}
       </div>

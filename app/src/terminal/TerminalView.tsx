@@ -5,21 +5,78 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal, type ITerminalOptions } from "@xterm/xterm";
+import { Terminal, type IMarker, type ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { base64ToBytes } from "../backend/base64";
 import { NO_PWSH, type Backend, type SessionMsg } from "../backend/types";
 import { ShellMissing } from "../components/ShellMissing";
-import { isAppShortcut } from "../shortcuts";
+import { isAppShortcut, type KeyContext } from "../shortcuts";
 import { clamp, effectiveFontSize, LIMITS, useSettings, type AppSettings } from "../state/settings";
 import { newTabId, useStore } from "../state/store";
 import { useUi } from "../state/ui";
 import { xtermTheme, type Theme } from "../theme/theme";
+import { CommandBlocks } from "./blocks";
+import { FindBar } from "./FindBar";
 import { RemoteInput } from "./remoteInput";
 
-const terminals = new Map<string, { term: Terminal; fit: FitAddon; search: SearchAddon }>();
+interface TermEntry {
+  term: Terminal;
+  fit: FitAddon;
+  search: SearchAddon;
+  blocks: CommandBlocks;
+  /** 输入行从哪开始：收到提示符结束标记（133;B）时光标的位置；命令开始执行后清掉 */
+  input?: { marker: IMarker; x: number };
+}
+
+const terminals = new Map<string, TermEntry>();
 export const getTerminal = (id: string) => terminals.get(id);
+
+/** pwsh 送来的补全结果（私有消息 completions），补全面板订阅 */
+type CompletionsListener = (id: string, data: unknown) => void;
+const completionListeners = new Set<CompletionsListener>();
+export function onCompletions(fn: CompletionsListener): () => void {
+  completionListeners.add(fn);
+  return () => completionListeners.delete(fn);
+}
+
+/**
+ * 从屏幕上读出当前输入行：从提示符结束的位置读到光标（docs/04 §4 常驻面板）。
+ * line 是整行（含光标后面的字，可能混进 PSReadLine 的灰色联想），cursor 是光标在 line 里的下标。
+ * 不在提示符上时返回 null。
+ */
+export function readInput(id: string): { line: string; cursor: number } | null {
+  const t = terminals.get(id);
+  if (!t?.input || t.input.marker.isDisposed) return null;
+  const buf = t.term.buffer.active;
+  if (buf.type === "alternate") return null;
+  const startY = t.input.marker.line;
+  const curY = buf.baseY + buf.cursorY;
+  if (curY < startY || curY - startY > 50) return null;
+  let line = "";
+  let cursor = 0;
+  for (let y = startY; y <= buf.length - 1; y++) {
+    const row = buf.getLine(y);
+    if (!row) break;
+    if (y > startY && !row.isWrapped && y > curY) break;
+    const from = y === startY ? t.input.x : 0;
+    if (y === curY) cursor = line.length + row.translateToString(false, from, buf.cursorX).length;
+    line += row.translateToString(false, from);
+    if (y >= curY && !buf.getLine(y + 1)?.isWrapped) break;
+  }
+  line = line.replace(/\s+$/, "");
+  return { line, cursor: Math.min(cursor, line.length) };
+}
+
+/** 光标在屏幕上的位置（像素），补全面板贴着它弹出 */
+export function cursorPoint(id: string): { x: number; y: number; lineHeight: number } | null {
+  const t = terminals.get(id);
+  const screen = t?.term.element?.querySelector(".xterm-screen")?.getBoundingClientRect();
+  if (!t || !screen) return null;
+  const cw = screen.width / t.term.cols;
+  const ch = screen.height / t.term.rows;
+  return { x: screen.left + t.term.buffer.active.cursorX * cw, y: screen.top + (t.term.buffer.active.cursorY + 1) * ch, lineHeight: ch };
+}
 
 /**
  * 重画所有终端的字形。WebGL 渲染器的字形贴图是各终端共用的（字体、字号相同时），
@@ -37,6 +94,12 @@ function redraw(term: Terminal) {
     // 默认渲染器没有贴图
   }
   term.refresh(0, term.rows - 1);
+}
+
+/** 快捷键归属要看的状态：在不在全屏程序里、是不是本机提示符（shortcuts.ts 的 scope） */
+export function keyContext(id: string | undefined): KeyContext {
+  const tab = useStore.getState().tabs.find((t) => t.id === id);
+  return { altScreen: tab?.shellState === "altScreen", atPrompt: tab?.shellState === "prompt" && !tab.remote };
 }
 
 /** 去掉每行末尾的空格（终端用空格填满整行，复制出来很难看） */
@@ -64,15 +127,25 @@ export function terminalOptions(s: AppSettings, theme: Theme, transparent: boole
 
 interface Props {
   id: string;
+  /** 这个终端所在的标签页正显示着，且焦点在它这个窗格上 */
   active: boolean;
+  /** 所在的标签页正显示着（分屏时同一标签页的几个窗格都可见） */
+  visible: boolean;
+  /** 所在的标签页分了屏：获得焦点的窗格画个边框 */
+  split: boolean;
+  /** 在终端区里的位置（分屏时是一部分） */
+  rect: { left: string; top: string; width: string; height: string };
   theme: Theme;
   backend: Backend;
   transparent: boolean;
 }
 
-export function TerminalView({ id, active, theme, backend, transparent }: Props) {
+export function TerminalView({ id, active, visible, split, rect, theme, backend, transparent }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const settings = useSettings((s) => s.settings);
+  const findOpen = useUi((s) => s.findId === id);
+  const liveTheme = useRef(theme);
+  liveTheme.current = theme;
   const [paste, setPaste] = useState<string | null>(null);
   /** 找不到 pwsh 7：这个标签页显示安装引导，不显示终端 */
   const [missing, setMissing] = useState(false);
@@ -93,6 +166,8 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
       rescaleOverlappingGlyphs: true,
       // 方框线、块元素、Powerline 箭头由终端自己画，不依赖字体，对得严丝合缝
       customGlyphs: true,
+      // 滚动条左边留一条窄带画命令标记和查找结果
+      overviewRuler: { width: 8 },
       windowsPty: navigator.userAgent.includes("Windows") ? { backend: "conpty" } : undefined,
     });
     const fit = new FitAddon();
@@ -119,7 +194,15 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     } catch (e) {
       console.warn("mooncli: WebGL 不可用，使用默认渲染器", e);
     }
-    terminals.set(id, { term, fit, search });
+    const blocks = new CommandBlocks(
+      term,
+      () => {
+        const c = liveTheme.current.terminal;
+        return { running: c.brightBlack, ok: c.green, failed: c.red };
+      },
+      () => live.current.settings.terminal.commandMarks,
+    );
+    terminals.set(id, { term, fit, search, blocks });
     fit.fit();
 
     const apply = useStore.getState().apply;
@@ -161,6 +244,20 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
         }
         // 其它消息等前面的输出都画完再处理，保持先后顺序
         term.write("", () => {
+          const entry = terminals.get(id);
+          if (msg.type === "state" && msg.state === "prompt") {
+            blocks.onPrompt();
+            entry?.input?.marker.dispose();
+            const marker = term.registerMarker(0);
+            if (entry && marker) entry.input = { marker, x: term.buffer.active.cursorX };
+          } else if (msg.type === "commandStarted") {
+            blocks.onCommandStart();
+            entry?.input?.marker.dispose();
+            if (entry) entry.input = undefined;
+          } else if (msg.type === "completions") {
+            for (const fn of completionListeners) fn(id, msg.data);
+          }
+          else if (msg.type === "commandFinished") blocks.onCommandEnd(msg.exitCode);
           apply(id, onRemote(msg));
           if (msg.type === "exited") {
             term.write(`\r\n\x1b[90m[进程已退出，代码 ${msg.code ?? "未知"}]\x1b[0m\r\n`);
@@ -257,7 +354,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      if (isAppShortcut(e, live.current.settings.keys)) return false;
+      if (isAppShortcut(e, live.current.settings.keys, keyContext(id))) return false;
       const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
       const k = e.key.toLowerCase();
       // Ctrl+C：有选中内容时复制，没有时照常发中断信号
@@ -286,6 +383,16 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     el.addEventListener("paste", onPaste, true);
 
     // ---- 右键 ----
+    const isSplit = () => {
+      const st = useStore.getState();
+      const owner = st.tabs.find((t) => t.id === id)?.paneOf ?? id;
+      return !!st.tabs.find((t) => t.id === owner)?.split;
+    };
+    const splitHere = (dir: "row" | "column") => {
+      const st = useStore.getState();
+      st.focusPane(id);
+      if (!st.splitPane(dir, newTabId())) useUi.getState().showNotice("一个标签页最多分 4 个窗格");
+    };
     const onContext = (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
@@ -298,7 +405,13 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
           { label: "粘贴", icon: "paste", hint: "Ctrl+V", onSelect: pasteFromClipboard },
           { label: "全选", icon: "select", onSelect: () => term.selectAll() },
           "separator",
+          { label: "在输出中查找", icon: "search", hint: "Ctrl+Shift+F", onSelect: () => useUi.getState().setFind(id) },
+          { label: "选中这条命令的输出", icon: "select", onSelect: () => blocks.selectOutput() },
           { label: "清除屏幕", icon: "eraser", onSelect: () => term.clear() },
+          "separator",
+          { label: "向右分屏", icon: "layout", onSelect: () => splitHere("row") },
+          { label: "向下分屏", icon: "layout", onSelect: () => splitHere("column") },
+          ...(isSplit() ? [{ label: "关闭这个窗格", icon: "close", onSelect: () => useStore.getState().closePane(id) }] : []),
         ]);
         return;
       }
@@ -320,6 +433,15 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     };
     el.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
+    // 分屏时点进哪个窗格，焦点就给哪个
+    const onFocusIn = () => {
+      const st = useStore.getState();
+      const tab = st.tabs.find((t) => t.id === id);
+      const owner = tab?.paneOf ?? id;
+      if (st.tabs.find((t) => t.id === owner)?.split?.focus !== id) st.focusPane(id);
+    };
+    el.addEventListener("focusin", onFocusIn);
+
     // 附带的 Nerd Font 符号字体和系统字体加载完后，重新测量字符宽度、重画字形
     const remeasure = () => {
       term.options.fontFamily = live.current.settings.font.family;
@@ -335,6 +457,8 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("contextmenu", onContext);
       el.removeEventListener("wheel", onWheel, { capture: true });
+      el.removeEventListener("focusin", onFocusIn);
+      blocks.dispose();
       terminals.delete(id);
       backend.close(id);
       term.dispose();
@@ -346,6 +470,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
   useEffect(() => {
     const t = terminals.get(id);
     if (!t) return;
+    t.blocks.refresh();
     const opts = terminalOptions(settings, theme, transparent);
     const before = `${t.term.options.fontSize}|${t.term.options.fontFamily}|${t.term.options.lineHeight}`;
     t.term.options = opts;
@@ -359,15 +484,15 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
 
   useEffect(() => {
     const t = terminals.get(id);
-    if (active && t) {
+    if (visible && t) {
       requestAnimationFrame(() => {
         t.fit.fit();
         // 后台期间别的终端可能重建过共用的字形贴图，切回来先重画一遍
         redraw(t.term);
-        t.term.focus();
+        if (active && !useUi.getState().findId) t.term.focus();
       });
     }
-  }, [id, active]);
+  }, [id, active, visible, split, rect.width, rect.height]);
 
   const confirmPaste = (ok: boolean) => {
     const t = terminals.get(id);
@@ -377,8 +502,22 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
   };
 
   return (
-    <div className={`term-layer${active ? " active" : ""}`} aria-hidden={!active}>
+    <div
+      className={`term-layer${visible ? " shown" : ""}${active ? " active" : ""}${split ? " split" : ""}`}
+      style={{ inset: "auto", ...rect }}
+      aria-hidden={!visible}
+    >
       <div className="term-host" ref={host} />
+      {findOpen && terminals.get(id) && (
+        <FindBar
+          search={terminals.get(id)!.search}
+          theme={theme}
+          onClose={() => {
+            useUi.getState().setFind(null);
+            terminals.get(id)?.term.focus();
+          }}
+        />
+      )}
       {missing && <ShellMissing tabId={id} backend={backend} />}
       {paste !== null && <PasteConfirm text={paste} onDone={confirmPaste} />}
     </div>

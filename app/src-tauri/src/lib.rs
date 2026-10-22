@@ -106,6 +106,9 @@ fn session_create(
     let sink = Arc::new(UiSink::new(id.clone(), channel, state.history.clone()));
     sink.set_connect_commands(settings.remote.connect_commands.clone());
     let session = Session::spawn(opts, sink.clone()).map_err(err)?;
+    if let Some(pid) = session.pid() {
+        UiSink::watch_processes(Arc::downgrade(&sink), pid);
+    }
     // 同一个 id 再创建（比如界面重新加载）时，旧会话随 drop 结束
     state.sessions.lock().unwrap().insert(id, SessionEntry { session: Arc::new(session), sink });
     Ok(())
@@ -260,10 +263,11 @@ fn settings_set(state: State<'_, AppState>, value: serde_json::Value) -> CmdResu
     // 先按 Rust 端的结构检查一遍类型，写错了就拒绝，不把坏文件写到磁盘上
     let typed: Settings = serde_json::from_value(value.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
     let shell_changed = typed.shell.path != state.typed_settings().shell.path;
-    files::write_atomic(&state.settings_path, serde_json::to_string_pretty(&value).map_err(err)?.as_bytes())
-        .map_err(|e| format!("保存设置失败：{e}"))?;
-    data::auto_snapshot(&state.data);
+    let text = serde_json::to_string_pretty(&value).map_err(err)?;
+    // 先更新内存再写文件：监视设置文件的线程看到内容一致，就不会把自己的保存当成外部修改
     *state.settings.lock().unwrap() = value;
+    files::write_atomic(&state.settings_path, text.as_bytes()).map_err(|e| format!("保存设置失败：{e}"))?;
+    data::auto_snapshot(&state.data);
     for e in state.sessions.lock().unwrap().values() {
         e.sink.set_connect_commands(typed.remote.connect_commands.clone());
     }
@@ -271,6 +275,44 @@ fn settings_set(state: State<'_, AppState>, value: serde_json::Value) -> CmdResu
         *state.shell.lock().unwrap() = find_shell(typed.shell.path.as_deref());
     }
     Ok(())
+}
+
+/// 设置文件被别的程序改了（用户直接编辑 settings.json）：读进来通知界面；写坏了只报错，不覆盖用户的文件。
+/// 自己保存时文件内容和内存里一致，不会被当成外部修改。
+fn watch_settings_file(app: tauri::AppHandle, path: PathBuf) {
+    use tauri::Emitter;
+    std::thread::spawn(move || {
+        let mtime = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mut last = mtime(&path);
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            let now = mtime(&path);
+            if now == last {
+                continue;
+            }
+            last = now;
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let state = app.state::<AppState>();
+            let parsed = mooncli_config::jsonc::parse::<serde_json::Value>(&path.display().to_string(), &text)
+                .map_err(|e| e.to_string())
+                .and_then(|v| {
+                    serde_json::from_value::<Settings>(v.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
+                    if v.is_object() { Ok(v) } else { Err("设置文件的顶层应该是一个对象".into()) }
+                });
+            match parsed {
+                Ok(v) => {
+                    if *state.settings.lock().unwrap() == v {
+                        continue;
+                    }
+                    *state.settings.lock().unwrap() = v.clone();
+                    let _ = app.emit("settings-changed", v);
+                }
+                Err(e) => {
+                    let _ = app.emit("settings-error", e);
+                }
+            }
+        }
+    });
 }
 
 // ---- 数据管理（data.rs） ---------------------------------------------------------
@@ -287,9 +329,9 @@ fn replace_settings(
 ) -> CmdResult<serde_json::Value> {
     let _: Settings = serde_json::from_value(value.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
     data::snapshot_settings(&state.data, reason).map_err(|e| format!("备份当前设置失败：{e}"))?;
-    files::write_atomic(&state.settings_path, serde_json::to_string_pretty(&value).map_err(err)?.as_bytes())
-        .map_err(|e| format!("保存设置失败：{e}"))?;
+    let text = serde_json::to_string_pretty(&value).map_err(err)?;
     *state.settings.lock().unwrap() = value.clone();
+    files::write_atomic(&state.settings_path, text.as_bytes()).map_err(|e| format!("保存设置失败：{e}"))?;
     Ok(value)
 }
 
@@ -557,6 +599,9 @@ fn open_history(path: &std::path::Path, import: bool, keep_days: u32) -> Option<
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 记住主窗口的位置、大小、是否最大化（独立的 Agent 小窗不记）
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["agent"]).build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_local_data_dir()?;
@@ -592,6 +637,7 @@ pub fn run() {
                     .unwrap_or_else(|_| data_dir.clone()),
             };
             data::auto_snapshot(&data_paths);
+            watch_settings_file(app.handle().clone(), settings_path.clone());
             app.manage(AppState {
                 sessions: Mutex::new(HashMap::new()),
                 shell: Mutex::new(find_shell(typed.shell.path.as_deref())),

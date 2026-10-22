@@ -210,8 +210,13 @@ kbd { font-family: var(--ui-font); font-size: 11px; color: var(--textMuted); }
 
 /* ---- 终端区 ---- */
 .main { grid-area: main; position: relative; background: var(--term-bg); min-width: 0; min-height: 0; }
-.term-layer { position: absolute; inset: 0; padding: 12px 6px 12px 16px; visibility: hidden; }
-.term-layer.active { visibility: visible; }
+.term-layer { position: absolute; inset: 0; padding: 12px 6px 12px 16px; visibility: hidden; box-sizing: border-box; }
+.term-layer.shown { visibility: visible; }
+/* 分屏：窗格之间一条细线，获得焦点的窗格顶部一道主题色 */
+.term-layer.split { border-left: 1px solid var(--border); border-top: 1px solid var(--border); }
+.term-layer.split[style*="left: 0%"] { border-left: 0; }
+.term-layer.split[style*="top: 0%"] { border-top: 0; }
+.term-layer.split.active { box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 70%, transparent); }
 .term-host { width: 100%; height: 100%; user-select: text; }
 .term-host .xterm { height: 100%; }
 /* xterm.css 默认把视口涂成黑色，行数没填满时底部会露出来 */
@@ -716,3 +721,48 @@ kbd { font-family: var(--ui-font); font-size: 11px; color: var(--textMuted); }
 .agent-window .aw-head { padding-right: 18px; }
 .aw-close { position: absolute; top: 6px; right: 8px; border: 0; background: transparent; color: var(--textMuted); font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
 .aw-close:hover { color: var(--text); background: var(--surface2); }
+
+/* ---- 命令块标记（terminal/blocks.ts）：提示符行左边的小圆点 ---- */
+.xterm .cmd-mark { overflow: visible; pointer-events: none; }
+.xterm .cmd-mark::before {
+  content: ""; position: absolute; left: -11px; top: 50%; width: 6px; height: 6px; margin-top: -3px;
+  border-radius: 50%; background: var(--mark);
+}
+
+/* ---- 输出查找框（terminal/FindBar.tsx）---- */
+.find-bar {
+  position: absolute; top: 8px; right: 18px; z-index: 6; display: flex; align-items: center; gap: 2px;
+  padding: 4px 4px 4px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface1);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 12%, transparent); font: 12px var(--ui-font); zoom: var(--ui, 1);
+}
+.find-input { width: 200px; border: 0; outline: 0; background: transparent; color: var(--text); font: 12.5px var(--ui-font); }
+.find-count { min-width: 44px; color: var(--textMuted); text-align: right; font-variant-numeric: tabular-nums; padding-right: 4px; }
+.find-opt { border: 0; background: transparent; color: var(--textMuted); font: 12px var(--mono, monospace); min-width: 24px; height: 22px; border-radius: 5px; cursor: pointer; }
+.find-opt:hover { background: var(--surface2); color: var(--text); }
+.find-opt.on { background: var(--accentSoft); color: var(--text); }
+
+/* ---- 补全面板（components/CompletionPanel.tsx，docs/04 §4）---- */
+.completion {
+  position: fixed; z-index: 45; width: 420px; max-height: 320px; display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface1); color: var(--text);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 16%, transparent); font: 12.5px var(--ui-font); outline: none; overflow: hidden;
+  zoom: var(--ui, 1);
+}
+.completion.pinned { right: 12px; top: calc(var(--chrome-h, 40px) + 10px); bottom: calc(var(--foot-h, 26px) + 10px); width: 300px; max-height: none; }
+.completion.pinned.docked { position: static; grid-area: panel; width: auto; zoom: 1; border-radius: 0; border-width: 0 0 0 1px; box-shadow: none; }
+.completion.idle .cp-list { opacity: 0.45; }
+.cp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.cp-input { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, monospace); color: var(--textMuted); font-size: 11.5px; }
+.cp-btn { border: 0; background: transparent; color: var(--textMuted); font: 11.5px var(--ui-font); cursor: pointer; padding: 2px 5px; border-radius: 5px; }
+.cp-btn:hover { background: var(--surface2); color: var(--text); }
+.cp-list { overflow-y: auto; padding: 4px; flex: 1; min-height: 0; }
+.cp-item { display: grid; grid-template-columns: 46px minmax(0, auto) minmax(0, 1fr); align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; cursor: pointer; height: 26px; }
+.cp-item.sel { background: var(--accentSoft); }
+.cp-kind { font-size: 10.5px; color: var(--textMuted); text-align: center; border-radius: 4px; padding: 1px 0; background: var(--surface2); white-space: nowrap; }
+.cp-kind.k-hist { color: var(--ansi-magenta, var(--textMuted)); }
+.cp-kind.k-opt { color: var(--ansi-cyan, var(--textMuted)); }
+.cp-kind.k-sub, .cp-kind.k-cmd { color: var(--ansi-blue, var(--textMuted)); }
+.cp-label { font-family: var(--mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cp-desc { color: var(--textMuted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.cp-empty { padding: 14px 10px; color: var(--textMuted); text-align: center; }
+.cp-foot { padding: 5px 10px; border-top: 1px solid var(--border); color: var(--textMuted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

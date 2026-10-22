@@ -22,7 +22,9 @@ export type SessionMsg =
   | { type: "progress"; state: number; value: number }
   | { type: "env"; pwsh?: string; host?: string; admin?: boolean }
   | { type: "completions"; data: unknown }
-  | { type: "process"; kind: ProgramKind; exe: string; pid: number } // M5：进程探测
+  /** 进程树探测：pwsh 底下正在跑的进程链（exe 名，小写），空表示没有子进程 */
+  | { type: "process"; chain: string[]; pid: number | null }
+  | { type: "git"; branch: string | null }
   | { type: "exited"; code: number | null };
 
 /** 连接命令要连去哪（crates/mooncli-protocol/src/remote.rs） */
@@ -274,6 +276,10 @@ export interface Backend {
   /** 界面处理完这么多字节的输出（背压，docs/02 §2） */
   ack(id: string, bytes: number): void;
   close(id: string): void;
+  /** 设置文件被外部修改（热更新）；error 是写坏时的出错信息。返回取消订阅函数 */
+  onSettingsFile(cb: (e: { value?: unknown; error?: string }) => void): () => void;
+  /** 提醒用户：任务栏图标闪烁；system 为真时再发一条系统通知 */
+  attention(title: string, body: string, system: boolean): void;
   window: {
     minimize(): void;
     toggleMaximize(): void;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoTitle, dirName, displayTitle, guessKind, metaLine, programName } from "./title";
+import { autoTitle, dirName, displayTitle, guessKind, kindFromChain, metaLine, programName } from "./title";
 
 describe("标题规则", () => {
   const base = { title: {}, cwd: "C:\\Users\\moon\\code\\mooncli", profile: "日常" };
@@ -45,5 +45,15 @@ describe("标题规则", () => {
     expect(guessKind("ssh root@box")).toBe("ssh");
     expect(guessKind("pnpm i")).toBe("node");
     expect(guessKind(undefined)).toBe("pwsh");
+  });
+});
+
+describe("kindFromChain", () => {
+  it("取进程链里最有辨识度的程序", () => {
+    expect(kindFromChain(["cmd.exe", "node.exe", "codex.exe"])).toBe("codex");
+    expect(kindFromChain(["cmd.exe", "node.exe"])).toBe("node");
+    expect(kindFromChain(["powershell.exe", "ssh.exe"])).toBe("ssh");
+    expect(kindFromChain(["mystery.exe"])).toBeUndefined();
+    expect(kindFromChain([])).toBeUndefined();
   });
 });

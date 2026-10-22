@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  paneLeaves,
+  paneRects,
+  removePane,
+  splitPaneTree,
+  type PaneNode,
   SIDEBAR,
   breakpoint,
   computeLayout,
@@ -114,5 +119,27 @@ describe("响应式", () => {
 
   it("顶部标签布局没有侧栏", () => {
     expect(computeLayout({ ...base, tabsPosition: "top" }).sidebar.mode).toBe("none");
+  });
+});
+
+
+describe("分屏窗格树", () => {
+  const one: PaneNode = { pane: "a" };
+  it("同方向并排，不同方向嵌套", () => {
+    const two = splitPaneTree(one, "a", "row", "b");
+    expect(paneLeaves(two)).toEqual(["a", "b"]);
+    const three = splitPaneTree(two, "b", "row", "c");
+    expect(three).toEqual({ dir: "row", children: [{ pane: "a" }, { pane: "b" }, { pane: "c" }] });
+    const nested = splitPaneTree(two, "b", "column", "d");
+    expect(nested).toEqual({ dir: "row", children: [{ pane: "a" }, { dir: "column", children: [{ pane: "b" }, { pane: "d" }] }] });
+    const r = paneRects(nested);
+    expect(r.get("a")).toEqual({ left: "0%", top: "0%", width: "50%", height: "100%" });
+    expect(r.get("d")).toEqual({ left: "50%", top: "50%", width: "50%", height: "50%" });
+  });
+  it("删掉窗格后收起只剩一个的组", () => {
+    const nested: PaneNode = { dir: "row", children: [{ pane: "a" }, { dir: "column", children: [{ pane: "b" }, { pane: "d" }] }] };
+    expect(removePane(nested, "d")).toEqual({ dir: "row", children: [{ pane: "a" }, { pane: "b" }] });
+    expect(removePane(removePane(nested, "d")!, "b")).toEqual({ pane: "a" });
+    expect(removePane(one, "a")).toBeNull();
   });
 });

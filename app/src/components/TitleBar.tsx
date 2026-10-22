@@ -2,7 +2,7 @@
 import type { Backend } from "../backend/types";
 import type { Breakpoint } from "../layout/layout";
 import { useSettings } from "../state/settings";
-import { orderedTabs, useStore } from "../state/store";
+import { listView, orderedTabs, useStore } from "../state/store";
 import { displayTitle } from "../state/title";
 import { useUi } from "../state/ui";
 import { Icon, kindIcon } from "./Icons";
@@ -42,7 +42,7 @@ export function TitleBar({ backend, bp, showMenu, topTabs, now, actions }: Props
       </div>
       {topTabs && (
         <div className="toptabs" role="tablist">
-          {orderedTabs(tabs).map((t) => (
+          {orderedTabs(tabs).map((o) => listView(tabs, o)).map((t) => (
             <div
               key={t.id}
               role="tab"

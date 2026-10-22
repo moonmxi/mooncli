@@ -136,3 +136,55 @@ export function computeLayout(i: LayoutInput): Layout {
     terminalWidth: i.windowWidth - docked(),
   };
 }
+
+// ---- 分屏的窗格树 ----
+// 叶子是一个窗格（会话 id），内部节点是一组同方向排开的子节点：row = 左右排，column = 上下排。
+
+export type PaneNode = { pane: string } | { dir: "row" | "column"; children: PaneNode[] };
+export interface PaneRect {
+  left: string;
+  top: string;
+  width: string;
+  height: string;
+}
+
+/** 按排列顺序列出全部窗格 */
+export function paneLeaves(n: PaneNode): string[] {
+  return "pane" in n ? [n.pane] : n.children.flatMap(paneLeaves);
+}
+
+/** 在 target 窗格旁边加一个新窗格：方向和所在组相同就并排插在它后面，不同就把它拆成新的一组 */
+export function splitPaneTree(n: PaneNode, target: string, dir: "row" | "column", id: string): PaneNode {
+  if ("pane" in n) return n.pane === target ? { dir, children: [n, { pane: id }] } : n;
+  const i = n.children.findIndex((c) => "pane" in c && c.pane === target);
+  if (i >= 0 && n.dir === dir) return { ...n, children: [...n.children.slice(0, i + 1), { pane: id }, ...n.children.slice(i + 1)] };
+  return { ...n, children: n.children.map((c) => splitPaneTree(c, target, dir, id)) };
+}
+
+/** 删掉一个窗格；只剩一个孩子的组收起来。全删光返回 null */
+export function removePane(n: PaneNode, target: string): PaneNode | null {
+  if ("pane" in n) return n.pane === target ? null : n;
+  const children = n.children.map((c) => removePane(c, target)).filter((c): c is PaneNode => c !== null);
+  if (children.length === 0) return null;
+  if (children.length === 1) return children[0];
+  return { ...n, children };
+}
+
+/** 每个窗格在终端区里的位置（百分比） */
+export function paneRects(n: PaneNode, box = { x: 0, y: 0, w: 100, h: 100 }, out = new Map<string, PaneRect>()): Map<string, PaneRect> {
+  if ("pane" in n) {
+    out.set(n.pane, { left: `${box.x}%`, top: `${box.y}%`, width: `${box.w}%`, height: `${box.h}%` });
+    return out;
+  }
+  const k = n.children.length;
+  n.children.forEach((c, i) => {
+    const sub =
+      n.dir === "row"
+        ? { x: box.x + (box.w * i) / k, y: box.y, w: box.w / k, h: box.h }
+        : { x: box.x, y: box.y + (box.h * i) / k, w: box.w, h: box.h / k };
+    paneRects(c, sub, out);
+  });
+  return out;
+}
+
+export const FULL_RECT: PaneRect = { left: "0%", top: "0%", width: "100%", height: "100%" };

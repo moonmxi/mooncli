@@ -63,7 +63,26 @@ export function metaLine(ctx: TitleContext & { git?: string }, full = false): st
   return parts.join(" · ");
 }
 
-/** 根据命令文本推测程序类型（M5 会用进程树结果覆盖它） */
+/** 进程链里各程序的类型，越靠前越有辨识度（同一条链里取最靠前的那种） */
+const CHAIN_KINDS: [ProgramKind, string[]][] = [
+  ["claude", ["claude"]],
+  ["codex", ["codex"]],
+  ["ssh", ["ssh", "sshp", "sshpass", "mosh-client", "plink", "telnet"]],
+  ["editor", ["vim", "nvim", "hx", "micro", "nano", "vi"]],
+  ["python", ["python", "python3", "py", "uv", "pythonw"]],
+  ["build", ["cargo", "rustc", "dotnet", "go", "msbuild", "cl", "link", "make", "cmake", "ninja", "gradle", "mvn", "java"]],
+  ["node", ["node", "bun", "deno"]],
+  ["git", ["git"]],
+];
+
+/** 进程树探测的结果（Rust 端 UiMsg::Process）→ 程序类型；认不出时返回 undefined，沿用按命令文字的猜测 */
+export function kindFromChain(chain: string[]): ProgramKind | undefined {
+  const names = chain.map((e) => e.toLowerCase().replace(/\.exe$/, ""));
+  for (const [kind, exes] of CHAIN_KINDS) if (names.some((n) => exes.includes(n))) return kind;
+  return undefined;
+}
+
+/** 根据命令文本推测程序类型（运行起来后由进程树结果 kindFromChain 修正） */
 export function guessKind(command?: string): ProgramKind {
   const p = programName(command)?.toLowerCase();
   if (!p) return "pwsh";

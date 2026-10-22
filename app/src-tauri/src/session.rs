@@ -17,24 +17,75 @@ use tauri::ipc::Channel;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UiMsg {
-    Output { data: String, bytes: usize },
-    State { state: ShellState },
-    CommandStarted { text: Option<String> },
-    CommandFinished { text: Option<String>, exit_code: Option<i32> },
+    Output {
+        data: String,
+        bytes: usize,
+    },
+    State {
+        state: ShellState,
+    },
+    CommandStarted {
+        text: Option<String>,
+    },
+    CommandFinished {
+        text: Option<String>,
+        exit_code: Option<i32>,
+    },
     RemotePrompt,
-    RemoteConnecting { target: ConnectTarget },
-    RemoteConnected { target: ConnectTarget },
-    RemoteCommandStarted { seq: u64 },
-    RemoteCommandFinished { seq: u64, exit_code: Option<i32> },
-    RemoteDisconnected { exit_code: Option<i32> },
-    Cwd { host: Option<String>, path: String },
-    Title { text: String, activity: Option<String>, informative: bool },
+    RemoteConnecting {
+        target: ConnectTarget,
+    },
+    RemoteConnected {
+        target: ConnectTarget,
+    },
+    RemoteCommandStarted {
+        seq: u64,
+    },
+    RemoteCommandFinished {
+        seq: u64,
+        exit_code: Option<i32>,
+    },
+    RemoteDisconnected {
+        exit_code: Option<i32>,
+    },
+    Cwd {
+        host: Option<String>,
+        path: String,
+    },
+    Title {
+        text: String,
+        activity: Option<String>,
+        informative: bool,
+    },
     Bell,
-    Notify { title: Option<String>, body: String },
-    Progress { state: u8, value: u8 },
-    Env { pwsh: Option<String>, host: Option<String>, admin: Option<bool> },
-    Completions { data: serde_json::Value },
-    Exited { code: Option<u32> },
+    Notify {
+        title: Option<String>,
+        body: String,
+    },
+    Progress {
+        state: u8,
+        value: u8,
+    },
+    Env {
+        pwsh: Option<String>,
+        host: Option<String>,
+        admin: Option<bool>,
+    },
+    Completions {
+        data: serde_json::Value,
+    },
+    /// 正在跑的进程链（从 pwsh 往下，每层取最新的子进程），空表示没有子进程
+    Process {
+        chain: Vec<String>,
+        pid: Option<u32>,
+    },
+    /// 当前目录所在的 git 仓库和分支（不在仓库里时 branch 为空）
+    Git {
+        branch: Option<String>,
+    },
+    Exited {
+        code: Option<u32>,
+    },
 }
 
 fn now_ms() -> i64 {
@@ -99,6 +150,9 @@ pub struct UiSink {
     history: Arc<Mutex<Option<Store>>>,
     counters: Counters,
     started: Instant,
+    /// 上次报给界面的进程链，没变就不重复发
+    last_chain: Mutex<Vec<String>>,
+    last_git: Mutex<Option<Option<String>>>,
 }
 
 impl UiSink {
@@ -111,6 +165,39 @@ impl UiSink {
             history,
             counters: Counters::default(),
             started: Instant::now(),
+            last_chain: Mutex::default(),
+            last_git: Mutex::default(),
+        }
+    }
+
+    /// 每 1.5 秒看一眼 pwsh 底下在跑什么（只在有命令运行时看，提示符上不费这个事）。
+    /// 会话关掉后 sink 被释放，线程自己退出。
+    pub fn watch_processes(sink: std::sync::Weak<UiSink>, root: u32) {
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let Some(s) = sink.upgrade() else { return };
+                let busy = matches!(s.tracker.lock().unwrap().state(), ShellState::Running | ShellState::AltScreen);
+                let chain = if busy { mooncli_pty::process::child_chain(root) } else { Vec::new() };
+                let names: Vec<String> = chain.iter().map(|p| p.exe.clone()).collect();
+                let mut last = s.last_chain.lock().unwrap();
+                if *last != names {
+                    *last = names.clone();
+                    drop(last);
+                    s.send(UiMsg::Process { chain: names, pid: chain.last().map(|p| p.pid) });
+                }
+            }
+        });
+    }
+
+    /// 目录变了：看看在不在 git 仓库里、哪个分支（只读 .git/HEAD，不跑 git）
+    fn report_git(&self, path: &str) {
+        let branch = git_branch(std::path::Path::new(path));
+        let mut last = self.last_git.lock().unwrap();
+        if last.as_ref() != Some(&branch) {
+            *last = Some(branch.clone());
+            drop(last);
+            self.send(UiMsg::Git { branch });
         }
     }
 
@@ -154,12 +241,17 @@ impl UiSink {
         match e {
             ShellEvent::Cwd { host, path } => {
                 let mut info = self.info.lock().unwrap();
+                let mut local = false;
                 if let Some(r) = info.remote.as_mut().filter(|_| host.is_some()) {
                     r.cwd = Some(path.clone());
                 } else if host.is_none() || self.tracker.lock().unwrap().state() == ShellState::Prompt {
                     info.cwd = Some(path.clone());
+                    local = info.remote.is_none();
                 }
                 drop(info);
+                if local {
+                    self.report_git(&path);
+                }
                 self.send(UiMsg::Cwd { host, path });
             }
             ShellEvent::Title { text } => {
@@ -336,5 +428,59 @@ impl Sink for UiSink {
 
     fn exited(&self, code: Option<u32>) {
         self.send(UiMsg::Exited { code });
+    }
+}
+
+/// 从 dir 往上找 git 仓库，读出当前分支；分离头指针时给前 7 位提交号。不在仓库里返回 None。
+/// `.git` 可能是目录，也可能是指向别处的文件（worktree、子模块：`gitdir: <路径>`）。
+pub fn git_branch(dir: &std::path::Path) -> Option<String> {
+    let mut cur = Some(dir);
+    while let Some(d) = cur {
+        let dot = d.join(".git");
+        let git_dir = if dot.is_dir() {
+            Some(dot)
+        } else if dot.is_file() {
+            std::fs::read_to_string(&dot).ok().and_then(|t| {
+                let p = t.trim().strip_prefix("gitdir:")?.trim().to_string();
+                let p = std::path::PathBuf::from(p);
+                Some(if p.is_absolute() { p } else { d.join(p) })
+            })
+        } else {
+            None
+        };
+        if let Some(g) = git_dir {
+            let head = std::fs::read_to_string(g.join("HEAD")).ok()?;
+            let head = head.trim();
+            return Some(match head.strip_prefix("ref: refs/heads/") {
+                Some(b) => b.to_string(),
+                None => head.chars().take(7).collect(),
+            });
+        }
+        cur = d.parent();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_branch;
+
+    #[test]
+    fn reads_branch_from_head_dir_and_gitdir_file() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("src").join("deep")).unwrap();
+        std::fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        assert_eq!(git_branch(&repo.join("src").join("deep")).as_deref(), Some("feat/x"));
+        // worktree：.git 是文件
+        let wt = t.path().join("wt");
+        let wt_git = t.path().join("wtgit");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(&wt_git).unwrap();
+        std::fs::write(wt_git.join("HEAD"), "0123456789abcdef\n").unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}", wt_git.display())).unwrap();
+        assert_eq!(git_branch(&wt).as_deref(), Some("0123456"));
+        assert_eq!(git_branch(&t.path().join("nowhere")), None);
     }
 }

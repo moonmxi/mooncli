@@ -27,6 +27,14 @@ interface UiState {
   /** 设置里正在录新的快捷键：这时按键不触发任何快捷键 */
   recordingKey: boolean;
   settings: { open: boolean; section: SettingsSection };
+  /** 补全面板（docs/04 §4）：开在哪个终端上；pinned = 钉在右侧常驻 */
+  completion: { id: string; pinned: boolean; seq: number } | null;
+  openCompletion(id: string): void;
+  closeCompletion(): void;
+  pinCompletion(pinned: boolean): void;
+  /** 哪个终端开着查找框 */
+  findId: string | null;
+  setFind(id: string | null): void;
   /** 用户点状态栏暂时收起了浮动的用量小窗 */
   agentHidden: boolean;
   toggleAgentHidden(): void;
@@ -52,6 +60,21 @@ export const useUi = create<UiState>((set) => ({
   historyOpen: false,
   recordingKey: false,
   settings: { open: false, section: "appearance" },
+  completion: null,
+  openCompletion(id) {
+    // 已经钉住时再按一次：在常驻面板里请求一次 pwsh 补全（seq 变了面板就会重新请求）
+    set((s) => ({ completion: { id, pinned: s.completion?.pinned ?? false, seq: (s.completion?.seq ?? 0) + 1 }, menu: null }));
+  },
+  closeCompletion() {
+    set({ completion: null });
+  },
+  pinCompletion(pinned) {
+    set((s) => (s.completion ? { completion: { ...s.completion, pinned } } : {}));
+  },
+  findId: null,
+  setFind(id) {
+    set({ findId: id });
+  },
   agentHidden: false,
   toggleAgentHidden() {
     set((s) => ({ agentHidden: !s.agentHidden }));

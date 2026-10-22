@@ -1,6 +1,8 @@
 // 真正的后端：通过 Tauri 调 Rust 主程序（app/src-tauri/src/session.rs）。
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type {
   Backend,
   CreateOptions,
@@ -89,6 +91,19 @@ export function tauriBackend(): Backend {
     },
     close(id) {
       invoke("session_close", { id }).catch(log("关闭会话"));
+    },
+    onSettingsFile(cb) {
+      const offs = [listen("settings-changed", (e) => cb({ value: e.payload })), listen<string>("settings-error", (e) => cb({ error: e.payload }))];
+      return () => offs.forEach((p) => p.then((off) => off()));
+    },
+    attention(title, body, system) {
+      win.requestUserAttention(UserAttentionType.Informational).catch(log("任务栏提醒"));
+      if (!system) return;
+      (async () => {
+        let ok = await isPermissionGranted();
+        if (!ok) ok = (await requestPermission()) === "granted";
+        if (ok) sendNotification({ title, body });
+      })().catch(log("发送系统通知"));
     },
     window: {
       minimize: () => void win.minimize(),

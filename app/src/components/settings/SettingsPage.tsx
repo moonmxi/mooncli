@@ -466,25 +466,41 @@ function TerminalSection({ s, update, reset }: { s: AppSettings; update: Update;
 
 function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; reset: Reset }) {
   return (
-    <Group title="标签栏" action={reset((d) => (d.tabs = structuredClone(DEFAULTS.tabs)))}>
-      <Row label="位置">
-        <Segmented label="标签栏位置" value={s.tabs.position} options={[{ value: "left", label: "左侧" }, { value: "top", label: "顶部" }]} onChange={(v) => update((d) => (d.tabs.position = v))} />
-      </Row>
-      <Row label="侧栏宽度" desc="52 表示收起。也可以直接拖动侧栏右边缘，双击边缘切换收起和展开">
-        <Stepper
-          label="侧栏宽度"
-          value={s.tabs.sidebar.width}
-          min={SIDEBAR.collapsed}
-          max={SIDEBAR.max}
-          step={8}
-          unit="px"
-          onChange={(v) => update((d) => (d.tabs.sidebar.width = v < SIDEBAR.min ? (v < d.tabs.sidebar.width ? SIDEBAR.collapsed : SIDEBAR.min) : v))}
-        />
-      </Row>
-      <Row label="窗口变窄时自动收起侧栏" desc="窗口宽度不够时先收起侧栏，保证终端至少 80 列">
-        <Toggle label="自动收起侧栏" value={s.tabs.sidebar.autoCollapse} onChange={(v) => update((d) => (d.tabs.sidebar.autoCollapse = v))} />
-      </Row>
-    </Group>
+    <>
+      <Group title="标签栏" action={reset((d) => (d.tabs = structuredClone(DEFAULTS.tabs)))}>
+        <Row label="位置">
+          <Segmented label="标签栏位置" value={s.tabs.position} options={[{ value: "left", label: "左侧" }, { value: "top", label: "顶部" }]} onChange={(v) => update((d) => (d.tabs.position = v))} />
+        </Row>
+        <Row label="侧栏宽度" desc="52 表示收起。也可以直接拖动侧栏右边缘，双击边缘切换收起和展开">
+          <Stepper
+            label="侧栏宽度"
+            value={s.tabs.sidebar.width}
+            min={SIDEBAR.collapsed}
+            max={SIDEBAR.max}
+            step={8}
+            unit="px"
+            onChange={(v) => update((d) => (d.tabs.sidebar.width = v < SIDEBAR.min ? (v < d.tabs.sidebar.width ? SIDEBAR.collapsed : SIDEBAR.min) : v))}
+          />
+        </Row>
+        <Row label="窗口变窄时自动收起侧栏" desc="窗口宽度不够时先收起侧栏，保证终端至少 80 列">
+          <Toggle label="自动收起侧栏" value={s.tabs.sidebar.autoCollapse} onChange={(v) => update((d) => (d.tabs.sidebar.autoCollapse = v))} />
+        </Row>
+        <Row label="打开时恢复上次的标签页" desc="恢复每个标签页的目录、改过的名字、颜色、置顶和分屏布局；shell 是新开的，屏幕内容和正在跑的程序不恢复">
+          <Toggle label="恢复上次的标签页" value={s.tabs.restoreSession} onChange={(v) => update((d) => (d.tabs.restoreSession = v))} />
+        </Row>
+      </Group>
+      <Group title="提醒">
+        <Row label="说明" desc="后台标签页响铃、程序发通知、超过 30 秒的命令跑完、Agent 等你确认或跑完一轮时，标签上会亮一个点。窗口不在前台时还可以：">
+          <span />
+        </Row>
+        <Row label="任务栏图标闪烁">
+          <Toggle label="任务栏图标闪烁" value={s.notifications.taskbar} onChange={(v) => update((d) => (d.notifications.taskbar = v))} />
+        </Row>
+        <Row label="系统通知" desc="Windows 右下角弹出通知，写明是哪个标签页、发生了什么">
+          <Toggle label="系统通知" value={s.notifications.system} onChange={(v) => update((d) => (d.notifications.system = v))} />
+        </Row>
+      </Group>
+    </>
   );
 }
 

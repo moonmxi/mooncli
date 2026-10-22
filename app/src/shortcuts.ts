@@ -23,7 +23,16 @@ export type ActionId =
   | "fontSmaller"
   | "clearScreen"
   | "cycleTheme"
-  | "copyCwd";
+  | "copyCwd"
+  | "find"
+  | "prevCommand"
+  | "nextCommand"
+  | "selectOutput"
+  | "complete"
+  | "splitRight"
+  | "splitDown"
+  | "closePane"
+  | "focusNextPane";
 
 export type Action = { type: ActionId } | { type: "gotoTab"; index: number };
 
@@ -33,8 +42,19 @@ export type Keymap = Partial<Record<ActionId, string[]>>;
 export interface ActionDef {
   id: ActionId;
   label: string;
-  group: "标签页" | "面板" | "缩放" | "其它";
+  group: "标签页" | "分屏" | "面板" | "命令" | "缩放" | "其它";
   defaults: string[];
+  /**
+   * 什么时候才由 mooncli 处理：shell = 不在全屏程序里（vim、htop 照样收到这个键）；
+   * prompt = 只在本机提示符上（ssh 里、程序运行时原样发给 shell）。不写就是任何时候。
+   */
+  scope?: "shell" | "prompt";
+}
+
+/** 判断快捷键归属时要知道的当前标签页状态 */
+export interface KeyContext {
+  altScreen?: boolean;
+  atPrompt?: boolean;
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -57,6 +77,16 @@ export const ACTIONS: ActionDef[] = [
   { id: "clearScreen", label: "清除屏幕", group: "其它", defaults: [] },
   { id: "cycleTheme", label: "换一个主题", group: "其它", defaults: [] },
   { id: "copyCwd", label: "复制当前目录路径", group: "其它", defaults: [] },
+  { id: "find", label: "在输出中查找", group: "命令", defaults: ["Ctrl+Shift+F"] },
+  { id: "prevCommand", label: "跳到上一条命令", group: "命令", defaults: ["Ctrl+Up"], scope: "shell" },
+  { id: "nextCommand", label: "跳到下一条命令", group: "命令", defaults: ["Ctrl+Down"], scope: "shell" },
+  { id: "selectOutput", label: "选中这条命令的输出", group: "命令", defaults: ["Ctrl+Shift+A"], scope: "shell" },
+  // 中文输入法常把 Ctrl+Space 占作中英切换，按键到不了程序，所以再给一个 Alt+/
+  { id: "complete", label: "补全面板", group: "命令", defaults: ["Ctrl+Space", "Alt+/"], scope: "prompt" },
+  { id: "splitRight", label: "向右分屏", group: "分屏", defaults: ["Ctrl+Shift+E"] },
+  { id: "splitDown", label: "向下分屏", group: "分屏", defaults: ["Ctrl+Shift+O"] },
+  { id: "closePane", label: "关闭当前窗格", group: "分屏", defaults: [] },
+  { id: "focusNextPane", label: "切到下一个窗格", group: "分屏", defaults: ["Alt+`"] },
 ];
 
 export const actionDef = (id: ActionId) => ACTIONS.find((a) => a.id === id)!;
@@ -153,17 +183,22 @@ function resolve(keymap: Keymap): Map<string, ActionId> {
   return m;
 }
 
-export function matchShortcut(e: KeyLike, keymap: Keymap = EMPTY): Action | null {
+export function matchShortcut(e: KeyLike, keymap: Keymap = EMPTY, ctx: KeyContext = {}): Action | null {
   const combo = comboFromEvent(e);
   if (!combo) return null;
   const id = resolve(keymap).get(combo);
-  if (id) return { type: id };
+  if (id) {
+    const scope = actionDef(id).scope;
+    if (scope === "shell" && ctx.altScreen) return null;
+    if (scope === "prompt" && !ctx.atPrompt) return null;
+    return { type: id };
+  }
   // Alt+1…9 跳到第 N 个标签页（固定，不可改；用户把 Alt+数字 分给别的操作时以用户的为准）
   if (/^Alt\+[1-9]$/.test(combo)) return { type: "gotoTab", index: Number(combo.slice(4)) - 1 };
   return null;
 }
 
-export const isAppShortcut = (e: KeyboardEvent, keymap?: Keymap) => matchShortcut(e, keymap) !== null;
+export const isAppShortcut = (e: KeyboardEvent, keymap?: Keymap, ctx?: KeyContext) => matchShortcut(e, keymap, ctx) !== null;
 
 /** 界面上显示的快捷键提示：取第一个 */
 export function keyHint(id: ActionId, keymap?: Keymap): string | undefined {

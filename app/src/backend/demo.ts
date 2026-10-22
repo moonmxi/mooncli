@@ -571,6 +571,8 @@ export function demoBackend(): Backend {
       sessions.get(id)?.timers.forEach(clearTimeout);
       sessions.delete(id);
     },
+    onSettingsFile: () => () => {},
+    attention: () => {},
     window: { minimize() {}, toggleMaximize() {}, close() {} },
   };
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { orderedTabs, useStore } from "./store";
+import { focusedTab, listView, orderedTabs, panesOf, useStore } from "./store";
 
 const s = () => useStore.getState();
 
@@ -90,5 +90,52 @@ describe("标签页状态", () => {
   it("复制标签页带上起始目录", () => {
     s().addTab("a", { cwd: "C:/code" });
     expect(s().tabs[0]).toMatchObject({ initialCwd: "C:/code", cwd: "C:/code" });
+  });
+});
+
+describe("分屏", () => {
+  it("分屏的窗格不进标签列表，焦点跟着新窗格走", () => {
+    s().addTab("a");
+    expect(s().splitPane("row", "p1")).toBe("p1");
+    expect(orderedTabs(s().tabs).map((t) => t.id)).toEqual(["a"]);
+    expect(focusedTab(s())?.id).toBe("p1");
+    s().splitPane("column", "p2");
+    expect(panesOf(s().tabs[0])).toEqual(["a", "p1", "p2"]);
+    s().focusNextPane();
+    expect(focusedTab(s())?.id).toBe("a");
+  });
+
+  it("列表里显示获得焦点的窗格的内容，身份是标签页自己的", () => {
+    s().addTab("a");
+    s().rename("a", "我的标签");
+    s().splitPane("row", "p1");
+    s().apply("p1", { type: "cwd", host: null, path: "D:/work" });
+    const v = listView(s().tabs, s().tabs[0]);
+    expect(v).toMatchObject({ id: "a", cwd: "D:/work" });
+    expect(v.title.user).toBe("我的标签");
+  });
+
+  it("关掉标签页自己那个窗格：下一个窗格接替它的位置和名字", () => {
+    s().addTab("x");
+    s().addTab("a");
+    s().togglePin("a");
+    s().rename("a", "接替测试");
+    s().splitPane("row", "p1");
+    s().closePane("a");
+    const ids = s().tabs.map((t) => t.id);
+    expect(ids).toEqual(["x", "p1"]);
+    const heir = s().tabs.find((t) => t.id === "p1")!;
+    expect(heir.paneOf).toBeUndefined();
+    expect(heir.pinned).toBe(true);
+    expect(heir.title.user).toBe("接替测试");
+    expect(heir.split).toBeUndefined();
+    expect(s().activeId).toBe("p1");
+  });
+
+  it("关闭标签页时连同窗格一起关", () => {
+    s().addTab("a");
+    s().splitPane("row", "p1");
+    s().closeTab("a");
+    expect(s().tabs).toEqual([]);
   });
 });

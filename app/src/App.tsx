@@ -5,6 +5,9 @@ import { CommandPalette, type PaletteCommand } from "./components/CommandPalette
 import { HistoryPanel } from "./components/HistoryPanel";
 import { AgentSidebarBlock, AgentWidget } from "./components/AgentWidget";
 import { startUsagePolling } from "./agent/store";
+import { startNotifier } from "./state/notifier";
+import { loadSaved, rebuild, startSaving } from "./state/restore";
+import { CompletionPanel } from "./components/CompletionPanel";
 import { ContextMenu } from "./components/ContextMenu";
 import { CopyToast, Notice } from "./components/CopyToast";
 import { SettingsPage } from "./components/settings/SettingsPage";
@@ -12,7 +15,7 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { makeTabActions } from "./components/tabMenu";
 import { TitleBar } from "./components/TitleBar";
-import { computeLayout, PANEL, SIDEBAR } from "./layout/layout";
+import { computeLayout, FULL_RECT, paneRects, PANEL, SIDEBAR } from "./layout/layout";
 import { keyHint, matchShortcut, type Action } from "./shortcuts";
 import {
   chooseTheme,
@@ -26,9 +29,9 @@ import {
   useSettings,
   zoomStep,
 } from "./state/settings";
-import { newTabId, useStore } from "./state/store";
+import { focusedTab, newTabId, orderedTabs, panesOf, useStore } from "./state/store";
 import { useUi } from "./state/ui";
-import { TerminalView, getTerminal } from "./terminal/TerminalView";
+import { TerminalView, getTerminal, keyContext } from "./terminal/TerminalView";
 import { applyTheme, builtinThemes } from "./theme/theme";
 
 
@@ -55,6 +58,7 @@ export function App() {
   const tabs = useStore((s) => s.tabs);
   const activeId = useStore((s) => s.activeId);
   const drawerOpen = useStore((s) => s.drawerOpen);
+  const completionPinned = useUi((s) => !!s.completion?.pinned);
   const settings = useSettings((s) => s.settings);
   const loaded = useSettings((s) => s.loaded);
   const systemDark = useSystemDark();
@@ -80,9 +84,20 @@ export function App() {
     setSettingsSaver((v) =>
       backend.saveSettings(v).catch((e) => useUi.getState().showNotice(`保存设置失败：${String(e)}`)),
     );
+    // 直接编辑 settings.json 也立即生效（热更新）；写错了提示出错位置，不覆盖文件
+    return backend.onSettingsFile(({ value, error }) => {
+      if (error) useUi.getState().showNotice(`settings.json 有错，没有应用：${error}`);
+      else {
+        useSettings.getState().setAll(mergeSettings(value));
+        useUi.getState().showNotice("已应用 settings.json 的修改");
+      }
+    });
   }, [backend]);
 
   useEffect(() => applyTheme(theme), [theme]);
+
+  // 后台标签页的提醒：窗口不在前台时闪任务栏、发系统通知
+  useEffect(() => startNotifier(backend), [backend]);
 
   // Agent 用量：开着时才轮询（小窗、侧栏区块、状态栏一段共用这一份数据）
   const agentOn = loaded && settings.agent.enabled;
@@ -113,7 +128,7 @@ export function App() {
   useEffect(() => {
     const t = setInterval(() => {
       setNow(Date.now());
-      const term = getTerminal(useStore.getState().activeId ?? "")?.term;
+      const term = getTerminal(focusedTab(useStore.getState())?.id ?? "")?.term;
       if (term) setSize(`${term.cols} × ${term.rows}`);
     }, 1000);
     return () => clearInterval(t);
@@ -132,7 +147,7 @@ export function App() {
         return;
       }
       s.closeTab(id);
-      if (s.tabs.length <= 1) {
+      if (orderedTabs(s.tabs).length <= 1) {
         // 最后一个标签页关掉时：真窗口直接关闭，演示时重新开一个
         if (backend.kind === "tauri") backend.window.close();
         else newTab();
@@ -181,7 +196,7 @@ export function App() {
           requestAnimationFrame(() => {
             // 改名输入框等自己拿了焦点的元素不抢
             if (document.activeElement && document.activeElement.matches("input, textarea:not(.xterm-helper-textarea)")) return;
-            getTerminal(useStore.getState().activeId ?? "")?.term.focus();
+            getTerminal(focusedTab(useStore.getState())?.id ?? "")?.term.focus();
           });
         }
       }),
@@ -193,7 +208,14 @@ export function App() {
   useEffect(() => {
     if (loaded && !started.current) {
       started.current = true;
-      if (useStore.getState().tabs.length === 0) newTab();
+      if (useStore.getState().tabs.length === 0) {
+        // 恢复上次的标签页（目录、名字、分屏布局）；没有或关掉了这个功能就开一个新的
+        const saved = useSettings.getState().settings.tabs.restoreSession ? loadSaved() : null;
+        const restored = saved ? rebuild(saved) : null;
+        if (restored && restored.tabs.length > 0) useStore.setState({ tabs: restored.tabs, activeId: restored.activeId });
+        else newTab();
+      }
+      return startSaving();
     }
   }, [loaded, newTab]);
 
@@ -204,8 +226,8 @@ export function App() {
     sidebarWidth: settings.tabs.sidebar.width,
     autoCollapse: settings.tabs.sidebar.autoCollapse,
     drawerOpen,
-    panelOpen: false,
-    panelPinned: false,
+    panelOpen: completionPinned,
+    panelPinned: true,
     panelWidth: PANEL.default,
     uiScale: ui,
   });
@@ -217,7 +239,8 @@ export function App() {
     (a: Action) => {
       const s = useStore.getState();
       const u = useUi.getState();
-      const cur = s.tabs.find((t) => t.id === s.activeId);
+      const cur = focusedTab(s);
+      const term = cur ? getTerminal(cur.id) : undefined;
       switch (a.type) {
         case "newTab":
           return newTab();
@@ -257,7 +280,28 @@ export function App() {
         case "history":
           return u.setHistory(!u.historyOpen);
         case "clearScreen":
-          return getTerminal(s.activeId ?? "")?.term.clear();
+          return term?.term.clear();
+        case "find":
+          return cur && u.setFind(u.findId === cur.id ? null : cur.id);
+        case "prevCommand":
+          return term?.blocks.jump(-1);
+        case "nextCommand":
+          return term?.blocks.jump(1);
+        case "selectOutput":
+          if (term && !term.blocks.selectOutput()) u.showNotice("这里没有可以选中的命令输出");
+          return;
+        case "complete":
+          return cur && u.openCompletion(cur.id);
+        case "splitRight":
+        case "splitDown":
+          if (!s.splitPane(a.type === "splitRight" ? "row" : "column", newTabId())) u.showNotice("一个标签页最多分 4 个窗格");
+          return;
+        case "closePane":
+          if (!cur) return;
+          if (cur.paneOf || s.tabs.find((t) => t.id === s.activeId)?.split) return s.closePane(cur.id);
+          return closeTab(cur.id);
+        case "focusNextPane":
+          return s.focusNextPane();
         case "cycleTheme":
           return cycleTheme();
         case "copyCwd":
@@ -273,7 +317,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (useUi.getState().recordingKey) return;
-      const a = matchShortcut(e, useSettings.getState().settings.keys);
+      const a = matchShortcut(e, useSettings.getState().settings.keys, keyContext(focusedTab(useStore.getState())?.id));
       if (!a) return;
       e.preventDefault();
       e.stopPropagation();
@@ -283,12 +327,12 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
-  const activeTab = tabs.find((t) => t.id === activeId);
+  const activeTab = focusedTab({ tabs, activeId });
 
   const keys = settings.keys;
   const commands: PaletteCommand[] = useMemo(() => {
     const st = () => useStore.getState();
-    const cur = () => st().tabs.find((t) => t.id === st().activeId);
+    const cur = () => focusedTab(st());
     const list: PaletteCommand[] = [
       { id: "new", group: "操作", label: "新建标签页", icon: "plus", hint: keyHint("newTab", keys), keywords: ["new tab"], run: () => newTab() },
       { id: "dup", group: "操作", label: "复制当前标签页（同一目录）", icon: "duplicate", hint: keyHint("duplicateTab", keys), keywords: ["duplicate"], run: () => newTab(cur()?.cwd) },
@@ -296,7 +340,15 @@ export function App() {
       { id: "rename", group: "操作", label: "重命名当前标签页", icon: "edit", hint: keyHint("renameTab", keys) ?? "F2", keywords: ["rename"], run: () => st().activeId && st().setEditing(st().activeId) },
       { id: "pin", group: "操作", label: "置顶 / 取消置顶当前标签页", icon: "pin", hint: keyHint("pinTab", keys), keywords: ["pin"], run: () => st().activeId && st().togglePin(st().activeId!) },
       { id: "copycwd", group: "操作", label: "复制当前目录路径", icon: "folder", hint: keyHint("copyCwd", keys), keywords: ["copy path", "pwd"], run: () => cur()?.cwd && copyText(cur()!.cwd!) },
-      { id: "clear", group: "操作", label: "清除屏幕", icon: "eraser", hint: keyHint("clearScreen", keys), keywords: ["clear", "cls"], run: () => getTerminal(st().activeId ?? "")?.term.clear() },
+      { id: "clear", group: "操作", label: "清除屏幕", icon: "eraser", hint: keyHint("clearScreen", keys), keywords: ["clear", "cls"], run: () => getTerminal(cur()?.id ?? "")?.term.clear() },
+      { id: "find", group: "命令", label: "在输出中查找", icon: "search", hint: keyHint("find", keys), keywords: ["find", "search", "查找"], run: () => runRef.current({ type: "find" }) },
+      { id: "prevcmd", group: "命令", label: "跳到上一条命令", icon: "history", hint: keyHint("prevCommand", keys), keywords: ["previous command", "jump"], run: () => runRef.current({ type: "prevCommand" }) },
+      { id: "nextcmd", group: "命令", label: "跳到下一条命令", icon: "history", hint: keyHint("nextCommand", keys), keywords: ["next command", "jump"], run: () => runRef.current({ type: "nextCommand" }) },
+      { id: "complete", group: "命令", label: "补全面板", icon: "text", hint: keyHint("complete", keys), keywords: ["complete", "completion", "补全"], run: () => runRef.current({ type: "complete" }) },
+      { id: "selout", group: "命令", label: "选中这条命令的输出", icon: "select", hint: keyHint("selectOutput", keys), keywords: ["select output"], run: () => runRef.current({ type: "selectOutput" }) },
+      { id: "splitr", group: "分屏", label: "向右分屏", icon: "layout", hint: keyHint("splitRight", keys), keywords: ["split", "pane", "分屏"], run: () => runRef.current({ type: "splitRight" }) },
+      { id: "splitd", group: "分屏", label: "向下分屏", icon: "layout", hint: keyHint("splitDown", keys), keywords: ["split", "pane", "分屏"], run: () => runRef.current({ type: "splitDown" }) },
+      { id: "closepane", group: "分屏", label: "关闭当前窗格", icon: "close", hint: keyHint("closePane", keys), keywords: ["close pane"], run: () => runRef.current({ type: "closePane" }) },
       { id: "history", group: "操作", label: "历史命令", icon: "history", hint: keyHint("history", keys), keywords: ["history", "recent commands"], run: () => useUi.getState().setHistory(true) },
       { id: "settings", group: "操作", label: "打开设置", icon: "gear", hint: keyHint("settings", keys), keywords: ["settings", "preferences"], run: () => useUi.getState().openSettings() },
       { id: "zin", group: "缩放", label: "放大", icon: "zoom", hint: keyHint("zoomIn", keys), keywords: ["zoom in"], run: () => zoom(1) },
@@ -336,7 +388,7 @@ export function App() {
         run: () => useSettings.getState().update((d) => (d.theme = chooseTheme(d.theme, t.name, t.kind))),
       })),
     ];
-    for (const t of tabs) {
+    for (const t of orderedTabs(tabs)) {
       list.push({
         id: `tab-${t.id}`,
         group: "标签页",
@@ -350,6 +402,7 @@ export function App() {
   }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys, backend]);
 
   const sideDocked = layout.sidebar.mode === "docked";
+  const panelDocked = layout.panel.mode === "docked";
   const chrome = Math.round(40 * ui);
   const foot = Math.round(26 * ui);
 
@@ -364,7 +417,8 @@ export function App() {
           "--chrome-h": `${chrome}px`,
           "--foot-h": `${foot}px`,
           gridTemplateRows: `${chrome}px minmax(0, 1fr) ${foot}px`,
-          gridTemplateColumns: `${sideDocked ? `${layout.sidebar.px}px` : "0px"} minmax(0, 1fr)`,
+          gridTemplateColumns: `${sideDocked ? `${layout.sidebar.px}px` : "0px"} minmax(0, 1fr)${panelDocked ? ` ${layout.panel.px}px` : ""}`,
+          gridTemplateAreas: panelDocked ? '"title title title" "side main panel" "status status status"' : undefined,
         } as React.CSSProperties
       }
     >
@@ -385,15 +439,32 @@ export function App() {
       {layout.sidebar.drawerOpen && <div className="drawer-backdrop" onClick={() => useStore.getState().setDrawerOpen(false)} />}
       <main ref={mainRef} className={`main${bgUrl ? " has-bg" : ""}`}>
         <Backdrop bg={settings.background} url={bgUrl} theme={theme} />
-        {tabs.map((t) => (
-          <TerminalView key={t.id} id={t.id} active={t.id === activeId} theme={theme} backend={backend} transparent={!!bgUrl} />
-        ))}
+        {/* 平铺渲染：每个会话一个终端，按会话 id 作 key，分屏、关窗格时终端不会被重建 */}
+        {orderedTabs(tabs).flatMap((t) => {
+          const panes = panesOf(t);
+          const shown = t.id === activeId;
+          const rects = t.split ? paneRects(t.split.tree) : null;
+          return panes.map((pid) => (
+            <TerminalView
+              key={pid}
+              id={pid}
+              visible={shown}
+              active={shown && (t.split ? t.split.focus === pid : true)}
+              split={!!t.split}
+              rect={rects?.get(pid) ?? FULL_RECT}
+              theme={theme}
+              backend={backend}
+              transparent={!!bgUrl}
+            />
+          ));
+        })}
       </main>
       <StatusBar tab={activeTab} bp={layout.bp} size={size} backendKind={backend.kind} zoom={settings.zoom} />
       <AgentWidget backend={backend} />
       <SettingsPage backend={backend} systemDark={systemDark} />
       <CommandPalette commands={commands} backend={backend} />
       <HistoryPanel backend={backend} onNewTab={newTab} />
+      <CompletionPanel backend={backend} docked={panelDocked} uiScale={ui} />
       <ContextMenu />
       <CopyToast />
       <Notice />

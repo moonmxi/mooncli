@@ -31,7 +31,8 @@ export interface AppSettings {
     overlay: number;
     scope: "terminal" | "window";
   };
-  tabs: { position: "left" | "top"; sidebar: { width: number; autoCollapse: boolean }; titleSource: string };
+  /** restoreSession：打开时恢复上次的标签页（目录、名字、颜色、分屏布局） */
+  tabs: { position: "left" | "top"; sidebar: { width: number; autoCollapse: boolean }; titleSource: string; restoreSession: boolean };
   terminal: {
     scrollback: number;
     minimumContrastRatio: number;
@@ -43,6 +44,8 @@ export interface AppSettings {
     confirmMultilinePaste: boolean;
     rightClick: "copyPaste" | "menu";
     copyToast: boolean;
+    /** 命令块标记：提示符行左边的圆点和滚动条上的标记（docs/02 §4） */
+    commandMarks: boolean;
   };
   shell: { path: string | null; args: string[]; integration: boolean; useBundledConpty: boolean; adaptColors: boolean };
   /** keepDays：只保留最近多少天的历史，0 表示一直保留 */
@@ -71,6 +74,10 @@ export interface AppSettings {
       dangerAt: number;
     };
   };
+  /** 后台标签页需要你看一眼时（响铃、长命令结束、Agent 等你确认）、窗口又不在前台：任务栏闪烁 / 系统通知 */
+  notifications: { taskbar: boolean; system: boolean };
+  /** 补全面板（docs/04 §4）：钉住后是否也在停顿时向 pwsh 要补全（悄悄发按键，默认关） */
+  completion: { pinnedRequestsPwsh: boolean };
   /** 改过的快捷键（shortcuts.ts 的 Keymap） */
   keys: Keymap;
 }
@@ -94,7 +101,7 @@ export const DEFAULTS: AppSettings = {
     overlay: 0.6,
     scope: "terminal",
   },
-  tabs: { position: "left", sidebar: { width: 220, autoCollapse: true }, titleSource: "auto" },
+  tabs: { position: "left", sidebar: { width: 220, autoCollapse: true }, titleSource: "auto", restoreSession: true },
   terminal: {
     scrollback: 10_000,
     // 3 而不是 4.5：太高会把灰色的联想提示也加深到正文那么深，分不清哪些是输入的（docs/08 §2）
@@ -107,6 +114,7 @@ export const DEFAULTS: AppSettings = {
     confirmMultilinePaste: true,
     rightClick: "copyPaste",
     copyToast: true,
+    commandMarks: true,
   },
   shell: { path: null, args: [], integration: true, useBundledConpty: true, adaptColors: true },
   history: { enabled: true, ignorePatterns: [], importPsreadline: true, keepDays: 0 },
@@ -119,6 +127,8 @@ export const DEFAULTS: AppSettings = {
     codexPath: null,
     widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
   },
+  notifications: { taskbar: true, system: true },
+  completion: { pinnedRequestsPwsh: false },
   keys: {},
 };
 

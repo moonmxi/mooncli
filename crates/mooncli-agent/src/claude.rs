@@ -23,6 +23,8 @@ use crate::timeutil::file_mtime_epoch;
 const MAX_TRANSCRIPTS: usize = 40;
 /// 小窗最多列多少个 Claude Code 会话。
 const MAX_SESSIONS: usize = 20;
+/// hooks 状态多久没更新就算过期（秒）
+const STALE_STATE_SECS: i64 = 30 * 60;
 
 /// Claude Code 配置目录：CLAUDE_CONFIG_DIR 优先，否则 ~/.claude。
 pub fn claude_config_dir() -> PathBuf {
@@ -175,6 +177,14 @@ fn hook_state(agent_dir: &Path, session_id: &str) -> Option<(SessionState, i64, 
         Some("SessionStart") => SessionState::Unknown,
         Some("UserPromptSubmit") | Some("PreToolUse") | Some("PostToolUse") => SessionState::Running,
         _ => SessionState::Unknown,
+    };
+    // 「运行中 / 等你确认」太久没有新事件，多半是 Claude Code 被直接关掉了（没机会发 SessionEnd），
+    // 不再显示这个过期的状态
+    let stale = crate::now_epoch() - entry.received_at > STALE_STATE_SECS;
+    let state = if stale && matches!(state, SessionState::Running | SessionState::Waiting) {
+        SessionState::Unknown
+    } else {
+        state
     };
     Some((state, entry.received_at, entry.tab_session_id))
 }
@@ -358,6 +368,7 @@ mod tests {
     fn collect_merges_statusline_hooks_and_transcripts() {
         let dir = tempfile::tempdir().unwrap();
         let agent = dir.path().join("agent");
+        let now = crate::now_epoch();
         write_entry(
             &agent,
             &claude_status_file_name("abc-123"),
@@ -368,7 +379,7 @@ mod tests {
             &agent,
             &claude_hook_file_name("abc-123"),
             &SpoolEntry {
-                received_at: 1010,
+                received_at: now,
                 tab_session_id: Some("tab-1".into()),
                 payload: json!({ "hook_event_name": "Notification", "session_id": "abc-123" }),
             },
@@ -392,7 +403,7 @@ mod tests {
         let main = list.iter().find(|s| s.session_id == "abc-123").unwrap();
         assert_eq!(main.state, SessionState::Waiting);
         assert_eq!(main.tab_session_id.as_deref(), Some("tab-1"));
-        assert_eq!(main.updated_at, 1010);
+        assert_eq!(main.updated_at, now);
         let other = list.iter().find(|s| s.session_id == "zzz").unwrap();
         assert_eq!(other.context.as_ref().unwrap().used_tokens, 40010);
         assert_eq!(other.context.as_ref().unwrap().window_tokens, 200_000);
@@ -404,5 +415,24 @@ mod tests {
         let (list, account) = collect(&dir.path().join("claude"), None, true);
         assert_eq!(list.len(), 1);
         assert!(account.is_none());
+    }
+}
+
+#[cfg(test)]
+mod stale_tests {
+    use super::*;
+    use crate::spool::write_entry;
+    use serde_json::json;
+
+    #[test]
+    fn old_waiting_state_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = SpoolEntry {
+            received_at: crate::now_epoch() - 2 * 3600,
+            tab_session_id: None,
+            payload: json!({ "hook_event_name": "Notification", "session_id": "s1" }),
+        };
+        write_entry(dir.path(), &claude_hook_file_name("s1"), &entry).unwrap();
+        assert_eq!(hook_state(dir.path(), "s1").unwrap().0, SessionState::Unknown);
     }
 }
