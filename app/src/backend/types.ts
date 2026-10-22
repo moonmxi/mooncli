@@ -39,6 +39,38 @@ export interface CreateOptions {
   cols: number;
   rows: number;
   cwd?: string;
+  /** 不填是 pwsh 7（state/store.ts 的 LaunchMode） */
+  launch?: "pwsh" | "windowsPowerShell" | "installPwsh";
+}
+
+/** 找不到 pwsh 7 时 create 报的错以它开头 */
+export const NO_PWSH = "NO_PWSH";
+
+export interface DataOverview {
+  configDir: string;
+  dataDir: string;
+  exportDir: string;
+  settingsBytes: number;
+  backgrounds: { name: string; bytes: number }[];
+  backups: { name: string; at: number; bytes: number; reason: string }[];
+  backupsBytes: number;
+  historyBytes: number;
+  historyCount: number | null;
+}
+
+export interface ImportSummary {
+  /** 导入后的设置（备份里没有设置时为 null） */
+  settings: unknown | null;
+  backgrounds: number;
+  historyAdded: number | null;
+}
+
+export interface ShellStatus {
+  pwsh: string | null;
+  /** 设置里指定了路径，但那里没有文件 */
+  configuredMissing: boolean;
+  windowsPowershell: string | null;
+  winget: boolean;
 }
 
 export interface Diagnostics {
@@ -125,6 +157,24 @@ export interface Backend {
   backgroundList(): Promise<string[]>;
   backgroundDelete(name: string): Promise<void>;
   diagnostics(): Promise<Diagnostics>;
+  /** 重新找一遍 shell（刚装好 pwsh 7 时用） */
+  shellStatus(): Promise<ShellStatus>;
+  /** 用系统浏览器打开 https 网址 */
+  openUrl(url: string): Promise<void>;
+  // ---- 数据管理（app/src-tauri/src/data.rs） ----
+  dataOverview(): Promise<DataOverview>;
+  dataBackupNow(): Promise<string | null>;
+  /** 恢复某份设置备份，返回恢复后的设置 */
+  dataRestoreBackup(name: string): Promise<unknown>;
+  /** 恢复默认设置（先自动备份），返回新的设置 */
+  settingsReset(): Promise<unknown>;
+  /** 导出备份包，返回文件路径 */
+  dataExport(includeHistory: boolean): Promise<string>;
+  dataImport(dataBase64: string, includeHistory: boolean): Promise<ImportSummary>;
+  /** 在文件管理器里打开："config" | "data" | "export" | 导出的备份文件路径 */
+  dataReveal(target: string): Promise<void>;
+  /** 删掉 days 天前的命令历史；0 表示全部删掉。返回删掉的条数 */
+  historyPrune(days: number): Promise<number>;
   sessionStats(id: string): Promise<SessionStats>;
   historySearch(text: string, opts?: { cwd?: string; limit?: number }): Promise<HistoryHit[]>;
   /** 历史面板用的完整查询 */

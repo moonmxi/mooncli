@@ -1,7 +1,7 @@
 // 演示后端：直接用浏览器打开界面时用，模拟一个简单的 pwsh，方便调界面。
 // 它直接产出界面消息（真后端里这些由 Rust 解析 shell 集成标记得到）。
 import { bytesToBase64 } from "./base64";
-import type { Backend, CreateOptions, HistoryHit, HistoryQuery, SessionMsg } from "./types";
+import { NO_PWSH, type Backend, type CreateOptions, type HistoryHit, type HistoryQuery, type SessionMsg } from "./types";
 
 const enc = new TextEncoder();
 const ESC = "\x1b";
@@ -89,6 +89,15 @@ const demoHistory: DemoRun[] = [
   sample("npm run build", 80, 1, "C:\\Users\\moon\\code\\blog"),
   sample("winget upgrade --all", 120, 0, "C:\\Users\\moon"),
 ].sort((a, b) => b.at - a.at);
+// 测性能用：localStorage 里设了 mooncli.demo.bigHistory 时，再加几千条
+try {
+  const n = Number(localStorage.getItem("mooncli.demo.bigHistory") ?? 0);
+  const verbs = ["git commit -m", "cargo build -p", "npm run", "docker logs", "kubectl get pods -n", "python manage.py"];
+  for (let i = 0; i < n; i++) demoHistory.push(sample(`${verbs[i % verbs.length]} item-${i % 997}`, 1 + i / 40, i % 9 ? 0 : 1));
+  if (n) demoHistory.sort((a, b) => b.at - a.at);
+} catch {
+  // 没有 localStorage 就算了
+}
 const demoFavorites = new Set(["git push origin main", "pnpm tauri dev"]);
 
 function remember(text: string, extra: Partial<DemoRun> = {}) {
@@ -302,6 +311,19 @@ function input(f: Fake, data: string) {
 
 const SETTINGS_KEY = "mooncli.demo.settings";
 
+const demoBackups = [
+  { name: "settings-1-auto.json", at: Date.now() - 3_600_000, bytes: 1350, reason: "auto" },
+  { name: "settings-2-auto.json", at: Date.now() - 26 * 3_600_000, bytes: 1310, reason: "auto" },
+];
+
+function demoNoPwsh(): boolean {
+  try {
+    return !!localStorage.getItem("mooncli.demo.noPwsh");
+  } catch {
+    return false;
+  }
+}
+
 export function demoBackend(): Backend {
   const sessions = new Map<string, Fake>();
   const backgrounds = new Map<string, string>();
@@ -348,6 +370,45 @@ export function demoBackend(): Backend {
       historyCount: demoHistory.length,
       backgroundsDir: "内存",
     }),
+    shellStatus: async () => ({
+      pwsh: demoNoPwsh() ? null : "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      configuredMissing: false,
+      windowsPowershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      winget: true,
+    }),
+    openUrl: async (url) => void window.open(url, "_blank"),
+    // 演示后端只模拟数据管理的界面，不真的读写文件
+    dataOverview: async () => ({
+      configDir: "C:\\Users\\moon\\AppData\\Roaming\\dev.moonmxi.mooncli",
+      dataDir: "C:\\Users\\moon\\AppData\\Local\\dev.moonmxi.mooncli",
+      exportDir: "C:\\Users\\moon\\Downloads",
+      settingsBytes: (localStorage.getItem(SETTINGS_KEY) ?? "").length,
+      backgrounds: [...backgrounds].map(([name, d]) => ({ name, bytes: Math.round((d.length * 3) / 4) })),
+      backups: demoBackups,
+      backupsBytes: demoBackups.reduce((a, b) => a + b.bytes, 0),
+      historyBytes: demoHistory.length * 180,
+      historyCount: demoHistory.length,
+    }),
+    async dataBackupNow() {
+      const name = `settings-${Date.now()}-manual.json`;
+      demoBackups.unshift({ name, at: Date.now(), bytes: 1200, reason: "manual" });
+      return name;
+    },
+    dataRestoreBackup: async () => JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}"),
+    async settingsReset() {
+      demoBackups.unshift({ name: `settings-${Date.now()}-before-reset.json`, at: Date.now(), bytes: 1200, reason: "before-reset" });
+      localStorage.removeItem(SETTINGS_KEY);
+      return {};
+    },
+    dataExport: async () => `C:\\Users\\moon\\Downloads\\mooncli-backup-${Date.now()}.zip`,
+    dataImport: async () => ({ settings: null, backgrounds: 0, historyAdded: 0 }),
+    dataReveal: async () => {},
+    async historyPrune(days) {
+      const cutoff = days === 0 ? Infinity : Date.now() - days * 86_400_000;
+      const before = demoHistory.length;
+      for (let i = demoHistory.length - 1; i >= 0; i--) if (demoHistory[i].at < cutoff) demoHistory.splice(i, 1);
+      return before - demoHistory.length;
+    },
     sessionStats: async () => ({ outputBytes: 1024, trustedMarks: 4, untrustedMarks: 0, privateMessages: 1, ageMs: 1000 }),
     historySearch: async (text, opts) => demoQuery({ text, limit: opts?.limit ?? 50 }),
     historyQuery: async (q) => demoQuery(q),
@@ -403,9 +464,26 @@ export function demoBackend(): Backend {
       remember(text, { host: "box", shell: "ssh", cwd: "/root" });
     },
     async create(opts: CreateOptions, onMsg) {
+      // 演示"电脑上没有 pwsh 7"：localStorage 里设了 mooncli.demo.noPwsh
+      if (!opts.launch && demoNoPwsh()) throw new Error(`${NO_PWSH}: 没有找到 PowerShell 7（演示）`);
       const f: Fake = { emit: onMsg, line: "", cwd: "C:\\Users\\moon\\code\\mooncli", mode: "prompt", timers: [], seq: 0 };
       sessions.set(opts.id, f);
-      onMsg({ type: "env", pwsh: "7.6.7（演示）", host: "MOON-PC", admin: false });
+      if (opts.launch === "installPwsh") {
+        const lines = ["正在用 winget 从微软官方源安装 PowerShell 7，可能需要一两分钟……", "已找到 PowerShell [Microsoft.PowerShell] 版本 7.6.7", "正在下载 …  ██████████████████████  110 MB / 110 MB", "已成功安装"];
+        lines.forEach((l, i) => f.timers.push(window.setTimeout(() => out(f, `${l}\r\n`), 500 * (i + 1))));
+        f.timers.push(
+          window.setTimeout(() => {
+            try {
+              localStorage.removeItem("mooncli.demo.noPwsh");
+            } catch {
+              // 没有就算了
+            }
+            onMsg({ type: "exited", code: 0 });
+          }, 500 * (lines.length + 1)),
+        );
+        return;
+      }
+      onMsg({ type: "env", pwsh: opts.launch === "windowsPowerShell" ? "5.1（演示）" : "7.6.7（演示）", host: "MOON-PC", admin: false });
       onMsg({ type: "cwd", host: "MOON-PC", path: f.cwd });
       out(f, `${c("90", "mooncli 演示后端 · 输入 help 查看可用命令")}\r\n`);
       prompt(f);

@@ -41,8 +41,16 @@ fn safe_name(name: &str) -> Option<String> {
 }
 
 pub fn save_background(dir: &Path, file_name: &str, data_base64: &str) -> Result<String, String> {
-    let name = safe_name(file_name).ok_or("只支持 png、jpg、webp、gif、bmp 图片")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(data_base64).map_err(|_| "图片数据损坏")?;
+    save_background_bytes(dir, file_name, &bytes)
+}
+
+/// 存一张背景图，返回实际用的文件名（重名时加序号；内容完全一样的直接复用原来的文件）。
+pub fn save_background_bytes(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<String, String> {
+    let name = safe_name(file_name).ok_or("只支持 png、jpg、webp、gif、bmp 图片")?;
+    if std::fs::read(dir.join(&name)).is_ok_and(|old| old == bytes) {
+        return Ok(name);
+    }
     if bytes.len() > MAX_BACKGROUND_BYTES {
         return Err("图片太大了（超过 30MB）".into());
     }
@@ -109,9 +117,12 @@ mod tests {
     fn save_load_list_delete() {
         let dir = std::env::temp_dir().join(format!("mooncli-bg-{}", std::process::id()));
         let png = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G']);
+        let other = base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G', 1]);
         let a = save_background(&dir, "moon.png", &png).unwrap();
-        let b = save_background(&dir, "moon.png", &png).unwrap();
-        assert_eq!((a.as_str(), b.as_str()), ("moon.png", "moon-2.png"));
+        // 同名同内容：直接用原来的文件；同名不同内容：加序号
+        let same = save_background(&dir, "moon.png", &png).unwrap();
+        let b = save_background(&dir, "moon.png", &other).unwrap();
+        assert_eq!((a.as_str(), same.as_str(), b.as_str()), ("moon.png", "moon.png", "moon-2.png"));
         assert_eq!(list_backgrounds(&dir), vec!["moon-2.png", "moon.png"]);
         assert!(load_background(&dir, "moon.png").unwrap().starts_with("data:image/png;base64,"));
         delete_background(&dir, "moon.png").unwrap();

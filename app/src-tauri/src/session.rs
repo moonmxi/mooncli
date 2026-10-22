@@ -114,6 +114,11 @@ impl UiSink {
         }
     }
 
+    /// 设置里加的"也算连接服务器"的命令
+    pub fn set_connect_commands(&self, names: Vec<String>) {
+        self.tracker.lock().unwrap().set_connect_commands(names);
+    }
+
     pub fn stats(&self) -> SessionStats {
         let c = &self.counters;
         SessionStats {

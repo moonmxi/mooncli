@@ -4,7 +4,13 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use rusqlite::types::Value;
 
+use std::collections::HashSet;
+
+use crate::index::TextStats;
 use crate::{Result, Store};
+
+/// (排序分, 最近一次的 id, 索引里的位置, 按主机筛选时那台主机的位置)
+type Scored = (f64, i64, usize, Option<usize>);
 
 const DAY: i64 = 24 * 60 * 60 * 1000;
 /// 去重视图最多从数据库取这么多条不同的命令来打分。十万条历史里不同命令通常远少于这个数。
@@ -124,10 +130,9 @@ impl Store {
         let mut fz = Fuzzy::new(&q.text);
         let recent = self.recent_in_session(q)?;
         let favorites = self.favorites()?;
-        let simple =
-            q.scope == Scope::All && !q.success_only && !q.failed_only && !q.favorites_only && q.host.is_none();
-        let mut hits = if q.dedupe && simple {
-            self.search_index(q, &mut fz, &recent)?
+        // "本标签页"要按会话筛，内存索引里没有这项；不去重要列出每一次执行。这两种走数据库
+        let mut hits = if q.dedupe && !matches!(q.scope, Scope::Session(_)) {
+            self.search_index(q, &mut fz, &recent, &favorites)?
         } else {
             self.search_sql(q, &mut fz, &recent)?
         };
@@ -163,13 +168,37 @@ impl Store {
             .collect())
     }
 
-    /// 默认范围走内存索引：先只用引用打分，选出前 `limit` 名再生成结果。
-    fn search_index(&self, q: &Query, fz: &mut Fuzzy, recent: &[String]) -> Result<Vec<Hit>> {
+    /// 去重搜索走内存索引：先筛选、只用引用打分，选出前 `limit` 名再生成结果。
+    fn search_index(
+        &self,
+        q: &Query,
+        fz: &mut Fuzzy,
+        recent: &[String],
+        favorites: &HashSet<String>,
+    ) -> Result<Vec<Hit>> {
         self.load_index()?;
         let ix = self.index.borrow();
         let ix = ix.as_ref().expect("刚加载过");
-        let mut scored: Vec<(f64, i64, usize)> = Vec::new();
+        let in_cwd = match &q.scope {
+            Scope::Cwd(c) => Some(c),
+            _ => None,
+        };
+        // 先做便宜的筛选，再做模糊匹配
+        let pass = |e: &TextStats| {
+            in_cwd.is_none_or(|c| e.cwds.contains_key(c))
+                && (!q.success_only || e.ok > 0)
+                && (!q.failed_only || e.failed > 0)
+                && (!q.favorites_only || favorites.contains(&e.text))
+        };
+        let mut scored: Vec<Scored> = Vec::new();
         for (i, e) in ix.entries.iter().enumerate() {
+            if !pass(e) {
+                continue;
+            }
+            let host = q.host.as_ref().and_then(|h| e.hosts.iter().position(|x| &x.host == h));
+            if q.host.is_some() && host.is_none() {
+                continue;
+            }
             let Some(m) = fz.score(&e.text) else { continue };
             let stats = Stats {
                 weighted_uses: e.uses.iter().map(|&t| decay(q.now_ms - t)).sum(),
@@ -177,11 +206,15 @@ impl Store {
                 ok: e.ok as i64,
                 failed: e.failed as i64,
             };
-            let rank = if q.sort == Sort::Recent { e.last_used as f64 } else { m + bonus(&stats, &e.text, q, recent) };
-            scored.push((rank, e.last_id, i));
+            let (last_used, last_id) = match host {
+                Some(h) => (e.hosts[h].last_used, e.hosts[h].last_id),
+                None => (e.last_used, e.last_id),
+            };
+            let rank = if q.sort == Sort::Recent { last_used as f64 } else { m + bonus(&stats, &e.text, q, recent) };
+            scored.push((rank, last_id, i, host));
         }
         // 按时间排时 rank 就是最近一次的时间
-        let by_rank = |a: &(f64, i64, usize), b: &(f64, i64, usize)| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1));
+        let by_rank = |a: &Scored, b: &Scored| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1));
         if scored.len() > q.limit && q.limit > 0 {
             scored.select_nth_unstable_by(q.limit - 1, by_rank);
             scored.truncate(q.limit);
@@ -190,12 +223,15 @@ impl Store {
         Ok(scored
             .into_iter()
             .take(q.limit)
-            .map(|(score, _, i)| {
+            .map(|(score, _, i, host)| {
                 let e = &ix.entries[i];
-                Hit {
+                let mut hit = Hit {
                     id: e.last_id,
                     text: e.text.clone(),
-                    count: e.uses.len() as i64,
+                    count: match in_cwd {
+                        Some(c) => e.cwds.get(c).copied().unwrap_or(0) as i64,
+                        None => e.uses.len() as i64,
+                    },
                     last_used: e.last_used,
                     last_cwd: e.last_cwd.clone(),
                     last_exit: e.last_exit,
@@ -204,7 +240,18 @@ impl Store {
                     favorite: false,
                     matched: fz.indices(&e.text),
                     score,
+                };
+                // 按主机筛选时，显示那台主机上的次数和最近一次
+                if let Some(h) = host.map(|h| &e.hosts[h]) {
+                    hit.id = h.last_id;
+                    hit.count = h.count as i64;
+                    hit.last_used = h.last_used;
+                    hit.last_cwd = h.last_cwd.clone();
+                    hit.last_exit = h.last_exit;
+                    hit.duration_ms = h.last_duration;
+                    hit.host = Some(h.host.clone());
                 }
+                hit
             })
             .collect())
     }
@@ -236,6 +283,8 @@ impl Store {
         let now = arg(Value::Integer(q.now_ms), &mut args);
         let cwd = arg(q.cwd.clone().map(Value::Text).unwrap_or(Value::Null), &mut args);
         let where_sql = wheres.join(" AND ");
+        // 不合并、又没输入搜索词时，按时间取前 limit 条就是结果，不用多取
+        let cap = if q.text.trim().is_empty() { q.limit as i64 } else { MAX_CANDIDATES };
         // 时间衰减：一天内 4、一周内 2、一月内 1、更早 0.5
         let weight = format!(
             "CASE WHEN {now} - started_at < {d} THEN 4.0 WHEN {now} - started_at < {w} THEN 2.0 \
@@ -262,7 +311,7 @@ impl Store {
                         CASE WHEN exit_code = 0 THEN 1 ELSE 0 END,
                         CASE WHEN exit_code IS NOT NULL AND exit_code <> 0 THEN 1 ELSE 0 END
                  FROM commands WHERE {where_sql}
-                 ORDER BY started_at DESC, id DESC LIMIT {MAX_CANDIDATES}"
+                 ORDER BY started_at DESC, id DESC LIMIT {cap}"
             )
         };
         let mut stmt = self.conn.prepare_cached(&sql)?;
@@ -502,14 +551,41 @@ mod tests {
         let s = sample();
         let mut a = Query::new("git", NOW);
         a.cwd = Some("/repo".into());
-        let mut b = a.clone();
-        b.host = Some("PC".into()); // 所有样本都是这台主机，但带了筛选就会走 SQL
-        let (ia, ib) = (s.search(&a).unwrap(), s.search(&b).unwrap());
+        let favs = s.favorites().unwrap();
+        // 两条路径直接比：内存索引 vs 数据库
+        let ia = s.search_index(&a, &mut Fuzzy::new(&a.text), &[], &favs).unwrap();
+        let ib = s.search_sql(&a, &mut Fuzzy::new(&a.text), &[]).unwrap();
         assert_eq!(texts(&ia), texts(&ib));
         for (x, y) in ia.iter().zip(&ib) {
             assert_eq!((x.id, x.count, x.last_exit), (y.id, y.count, y.last_exit));
             assert!((x.score - y.score).abs() < 1e-9, "{} {} vs {}", x.text, x.score, y.score);
         }
+    }
+
+    #[test]
+    fn host_filter_shows_that_hosts_runs() {
+        let s = Store::open_in_memory().unwrap();
+        for (host, cwd, exit, t) in
+            [("PC", "C:/x", Some(0), 1), ("box", "/srv", Some(1), 2), ("PC", "C:/y", Some(0), 3)]
+        {
+            let mut r = CommandRecord::new("make", t);
+            r.host = Some(host.into());
+            r.cwd = Some(cwd.into());
+            r.exit_code = exit;
+            s.insert(&r).unwrap();
+        }
+        let mut q = Query::new("", NOW);
+        q.host = Some("box".into());
+        let h = &s.search(&q).unwrap()[0];
+        assert_eq!(
+            (h.count, h.last_cwd.as_deref(), h.last_exit, h.host.as_deref()),
+            (1, Some("/srv"), Some(1), Some("box"))
+        );
+        let mut q = Query::new("", NOW);
+        q.scope = Scope::Cwd("C:/x".into());
+        assert_eq!(s.search(&q).unwrap()[0].count, 1);
+        q.scope = Scope::Cwd("/nowhere".into());
+        assert!(s.search(&q).unwrap().is_empty());
     }
 
     #[test]
@@ -545,6 +621,22 @@ mod tests {
             assert!(!hits.is_empty());
         }
         eprintln!("逐字输入时单次搜索最慢 {worst:?}");
+        // 历史面板的筛选（只看失败、某台主机、按时间）走数据库
+        for (name, f) in [
+            ("只看失败", (|q: &mut Query| q.failed_only = true) as fn(&mut Query)),
+            ("某台主机", |q: &mut Query| q.host = Some("PC".into())),
+            ("按时间、不合并", |q: &mut Query| {
+                q.sort = Sort::Recent;
+                q.dedupe = false
+            }),
+        ] {
+            let mut q = Query::new("cmd-4", NOW);
+            q.limit = 300;
+            f(&mut q);
+            let t = std::time::Instant::now();
+            s.search(&q).unwrap();
+            eprintln!("{name}：{:?}", t.elapsed());
+        }
         // 调试构建下放宽；发布构建的目标是 < 16ms（docs/09），CI 用 --release 跑一次
         let limit = if cfg!(debug_assertions) { 500 } else { 16 };
         assert!(worst.as_millis() < limit, "搜索太慢: {worst:?}");

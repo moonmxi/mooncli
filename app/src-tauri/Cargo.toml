@@ -22,4 +22,8 @@ mooncli-history.workspace = true
 mooncli-config.workspace = true
 mooncli-pty.workspace = true
 arboard = { version = "3", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
+
+[dev-dependencies]
+tempfile.workspace = true

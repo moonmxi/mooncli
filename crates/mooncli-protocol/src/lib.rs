@@ -5,7 +5,7 @@ pub mod scanner;
 pub mod title;
 pub mod tracker;
 
-pub use remote::{ConnectTarget, cwd_from_title, looks_like_prompt, parse_connect};
+pub use remote::{ConnectTarget, cwd_from_title, looks_like_prompt, parse_connect, parse_connect_with};
 pub use scanner::{MarkKind, PRIVATE_OSC, ScanOutput, Scanner, Segment, ShellEvent};
 pub use title::{CleanTitle, clean_title, is_uninformative};
 pub use tracker::{ShellState, Tracker, TrackerUpdate};

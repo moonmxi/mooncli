@@ -14,7 +14,7 @@ export interface MenuItem {
 
 export type MenuEntry = MenuItem | "separator";
 
-export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "keys";
+export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "keys" | "data";
 
 interface UiState {
   copyToast: { id: number; x: number; y: number; lines: number; chars: number } | null;
@@ -24,6 +24,8 @@ interface UiState {
   lastMenuAt: { x: number; y: number };
   paletteOpen: boolean;
   historyOpen: boolean;
+  /** 设置里正在录新的快捷键：这时按键不触发任何快捷键 */
+  recordingKey: boolean;
   settings: { open: boolean; section: SettingsSection };
   showCopyToast(x: number, y: number, text: string): void;
   showNotice(text: string): void;
@@ -31,6 +33,7 @@ interface UiState {
   closeMenu(): void;
   setPalette(open: boolean): void;
   setHistory(open: boolean): void;
+  setRecordingKey(on: boolean): void;
   openSettings(section?: SettingsSection): void;
   closeSettings(): void;
 }
@@ -44,6 +47,7 @@ export const useUi = create<UiState>((set) => ({
   lastMenuAt: { x: 0, y: 0 },
   paletteOpen: false,
   historyOpen: false,
+  recordingKey: false,
   settings: { open: false, section: "appearance" },
   showCopyToast(x, y, text) {
     const lines = text.split(/\r?\n/).length;
@@ -60,6 +64,9 @@ export const useUi = create<UiState>((set) => ({
   },
   setPalette(open) {
     set({ paletteOpen: open, menu: null, ...(open ? { historyOpen: false } : {}) });
+  },
+  setRecordingKey(on) {
+    set({ recordingKey: on });
   },
   setHistory(open) {
     set({ historyOpen: open, menu: null, ...(open ? { paletteOpen: false } : {}) });

@@ -22,6 +22,7 @@ pub struct Settings {
     pub terminal: Terminal,
     pub shell: Shell,
     pub history: History,
+    pub remote: Remote,
 }
 
 impl Default for Settings {
@@ -37,6 +38,7 @@ impl Default for Settings {
             terminal: Terminal::default(),
             shell: Shell::default(),
             history: History::default(),
+            remote: Remote::default(),
         }
     }
 }
@@ -269,12 +271,22 @@ pub struct History {
     /// 额外的"不记录"正则
     pub ignore_patterns: Vec<String>,
     pub import_psreadline: bool,
+    /// 只保留最近多少天，0 表示一直保留。启动时清理一次
+    pub keep_days: u32,
 }
 
 impl Default for History {
     fn default() -> Self {
-        Self { enabled: true, ignore_patterns: Vec::new(), import_psreadline: true }
+        Self { enabled: true, ignore_patterns: Vec::new(), import_psreadline: true, keep_days: 0 }
     }
+}
+
+/// 远程连接的识别（docs/06 §4.1）
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Remote {
+    /// 除了内置的 ssh、sshp、mosh、wsl……之外，也按 ssh 的写法识别成连接的命令（比如自己的别名）
+    pub connect_commands: Vec<String>,
 }
 
 impl Settings {

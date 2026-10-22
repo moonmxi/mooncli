@@ -69,7 +69,7 @@ export function guessKind(command?: string): ProgramKind {
   if (!p) return "pwsh";
   if (p === "claude") return "claude";
   if (p === "codex") return "codex";
-  if (p === "ssh") return "ssh";
+  if (["ssh", "sshp", "sshpass", "mosh", "plink", "telnet"].includes(p)) return "ssh";
   if (["vim", "nvim", "hx", "micro", "nano"].includes(p)) return "editor";
   if (p === "git") return "git";
   if (["node", "npm", "pnpm", "npx", "yarn", "bun", "deno"].includes(p)) return "node";

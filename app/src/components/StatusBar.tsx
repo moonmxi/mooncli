@@ -41,7 +41,14 @@ export function StatusBar({ tab, bp, size, backendKind, zoom }: Props) {
         onClick={() => state === "unknown" && openSettings("shell")}
       >
         <span className={`sdot s-${state}`} />
-        {tab?.env?.pwsh ? `pwsh ${tab.env.pwsh}` : "pwsh"} · {STATE_LABEL[state]}
+        {tab?.launch === "windowsPowerShell"
+          ? "Windows PowerShell 5.1（临时）"
+          : tab?.launch === "installPwsh"
+            ? "正在安装 PowerShell 7"
+            : tab?.env?.pwsh
+              ? `pwsh ${tab.env.pwsh}`
+              : "pwsh"}
+        {tab?.launch !== "installPwsh" && ` · ${STATE_LABEL[state]}`}
       </button>
       {remote && tab?.remote && (
         <span className={`status-remote${tab.remote.connected ? " on" : ""}`} title={`通过 ${tab.remote.via ?? "ssh"} 连接`}>

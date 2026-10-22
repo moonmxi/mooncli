@@ -1,4 +1,4 @@
-//! 默认范围（全部历史、去重）搜索用的内存索引。
+//! 去重搜索用的内存索引（全部历史、当前目录、某台主机、成败、收藏都走这里，只有"本标签页"和不去重走数据库）。
 //!
 //! 每次按键都在 SQLite 里对十万行做 GROUP BY 太慢（发布构建约 150ms），
 //! 所以按命令文本把统计信息汇总在内存里，写入时增量更新。
@@ -19,8 +19,21 @@ pub(crate) struct TextStats {
     /// 每次执行的时间，用于按查询时刻计算时间衰减
     pub uses: Vec<i64>,
     pub cwds: HashMap<String, u32>,
+    /// 每台主机上的次数和最近一次的情况：按主机筛选时显示的是那台主机上的结果
+    pub hosts: Vec<HostStats>,
     pub ok: u32,
     pub failed: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HostStats {
+    pub host: String,
+    pub count: u32,
+    pub last_id: i64,
+    pub last_used: i64,
+    pub last_cwd: Option<String>,
+    pub last_exit: Option<i32>,
+    pub last_duration: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -45,6 +58,7 @@ impl Index {
                     host: None,
                     uses: Vec::new(),
                     cwds: HashMap::new(),
+                    hosts: Vec::new(),
                     ok: 0,
                     failed: 0,
                 });
@@ -58,6 +72,32 @@ impl Index {
             *e.cwds.entry(c.clone()).or_default() += 1;
         }
         Self::count_exit(e, rec.exit_code);
+        if let Some(h) = &rec.host {
+            let pos = match e.hosts.iter().position(|x| &x.host == h) {
+                Some(p) => p,
+                None => {
+                    e.hosts.push(HostStats {
+                        host: h.clone(),
+                        count: 0,
+                        last_id: id,
+                        last_used: rec.started_at,
+                        last_cwd: None,
+                        last_exit: None,
+                        last_duration: None,
+                    });
+                    e.hosts.len() - 1
+                }
+            };
+            let hs = &mut e.hosts[pos];
+            hs.count += 1;
+            if (rec.started_at, id) >= (hs.last_used, hs.last_id) {
+                hs.last_id = id;
+                hs.last_used = rec.started_at;
+                hs.last_cwd = rec.cwd.clone();
+                hs.last_exit = rec.exit_code;
+                hs.last_duration = rec.duration_ms;
+            }
+        }
         // "最近一次"按执行时间算：导入的旧记录 id 更大，但时间更早
         if (rec.started_at, id) >= (e.last_used, e.last_id) {
             e.last_id = id;
@@ -78,6 +118,10 @@ impl Index {
         if e.last_id == id {
             e.last_exit = exit;
             e.last_duration = Some(duration_ms);
+        }
+        if let Some(hs) = e.hosts.iter_mut().find(|h| h.last_id == id) {
+            hs.last_exit = exit;
+            hs.last_duration = Some(duration_ms);
         }
     }
 

@@ -20,6 +20,9 @@ pub struct ShellSpec {
 }
 
 /// 按顺序找：设置里的路径 → PATH 里的 pwsh → 常见安装位置。
+///
+/// Windows 上找不到 pwsh 7 时返回 `None`，不会悄悄换成 Windows PowerShell 5.1：
+/// 由界面告诉用户缺了什么、给出安装办法，用户选了"先用 5.1"才用它（docs/02 §3.1）。
 pub fn find_shell(configured: Option<&str>) -> Option<ShellSpec> {
     if let Some(p) = configured.map(PathBuf::from).filter(|p| p.is_file()) {
         let kind = kind_of(&p);
@@ -28,7 +31,7 @@ pub fn find_shell(configured: Option<&str>) -> Option<ShellSpec> {
     let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
     let path_dirs: Vec<PathBuf> =
         std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    find_with(&path_dirs, env("ProgramFiles"), env("LOCALAPPDATA"), env("SHELL"), env("SystemRoot"))
+    find_with(&path_dirs, env("ProgramFiles"), env("LOCALAPPDATA"), env("SHELL"))
 }
 
 fn find_with(
@@ -36,7 +39,6 @@ fn find_with(
     program_files: Option<PathBuf>,
     local_app_data: Option<PathBuf>,
     unix_shell: Option<PathBuf>,
-    system_root: Option<PathBuf>,
 ) -> Option<ShellSpec> {
     let exe = if cfg!(windows) { "pwsh.exe" } else { "pwsh" };
     let mut candidates: Vec<PathBuf> = path_dirs.iter().map(|d| d.join(exe)).collect();
@@ -52,12 +54,67 @@ fn find_with(
         return Some(ShellSpec { program: p, kind: ShellKind::Pwsh });
     }
     if cfg!(windows) {
-        let root = system_root.unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-        let p = root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-        return p.is_file().then_some(ShellSpec { program: p, kind: ShellKind::WindowsPowerShell });
+        return None;
     }
     let sh = unix_shell.filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("/bin/sh"));
     Some(ShellSpec { kind: kind_of(&sh), program: sh })
+}
+
+/// Windows 自带的 Windows PowerShell 5.1。只在用户选了"先用它"时用，也用来运行安装 pwsh 的命令。
+pub fn find_windows_powershell() -> Option<ShellSpec> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let p = root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    p.is_file().then_some(ShellSpec { program: p, kind: ShellKind::WindowsPowerShell })
+}
+
+/// winget（Windows 自带的"应用安装程序"）在不在。老版本 Windows 10 上可能没有。
+pub fn find_winget() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "winget.exe" } else { "winget" };
+    let mut candidates: Vec<PathBuf> =
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).map(|d| d.join(exe)).collect()).unwrap_or_default();
+    if let Some(la) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(la).join(r"Microsoft\WindowsApps").join(exe));
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// 用 winget 安装 pwsh 7 时在标签页里运行的脚本：过程都显示出来，结束后进程退出，界面据此重新检测。
+pub const INSTALL_PWSH_SCRIPT: &str = r#"
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Write-Host '正在用 winget 从微软官方源安装 PowerShell 7，可能需要一两分钟……' -ForegroundColor Cyan
+Write-Host '（如果弹出"是否允许更改"的提示，请点"是"）' -ForegroundColor DarkGray
+Write-Host ''
+winget install --id Microsoft.PowerShell --exact --source winget --accept-package-agreements --accept-source-agreements
+$code = $LASTEXITCODE
+Write-Host ''
+if ($code -eq 0) {
+  Write-Host '安装完成，mooncli 会自动打开新的 PowerShell 7 标签页。' -ForegroundColor Green
+} else {
+  Write-Host "安装没有完成（代码 $code）。可以到 https://aka.ms/PSWindows 下载安装包手动安装。" -ForegroundColor Yellow
+}
+exit $code
+"#;
+
+/// 运行安装脚本的启动参数（用 Windows PowerShell 5.1，不加载集成、不读 profile）。
+pub fn install_pwsh_launch(shell: &ShellSpec, cwd: Option<String>, cols: u16, rows: u16) -> SpawnOptions {
+    SpawnOptions {
+        program: shell.program.display().to_string(),
+        args: vec![
+            "-NoLogo".into(),
+            "-NoProfile".into(),
+            "-EncodedCommand".into(),
+            encode_command(INSTALL_PWSH_SCRIPT),
+        ],
+        cwd,
+        env: vec![("TERM_PROGRAM".into(), "mooncli".into())],
+        cols,
+        rows,
+        nonce: None,
+        flow_control: true,
+    }
 }
 
 fn kind_of(p: &Path) -> ShellKind {
@@ -173,10 +230,10 @@ mod tests {
         let exe = if cfg!(windows) { "pwsh.exe" } else { "pwsh" };
         let in_path = touch(&d, &format!("bin/{exe}"));
         let in_pf = touch(&d, "pf/PowerShell/7/pwsh.exe");
-        let found = find_with(&[d.join("bin")], Some(d.join("pf")), None, None, None).unwrap();
+        let found = find_with(&[d.join("bin")], Some(d.join("pf")), None, None).unwrap();
         assert_eq!((found.program, found.kind), (in_path.clone(), ShellKind::Pwsh));
         std::fs::remove_file(&in_path).unwrap();
-        let found = find_with(&[d.join("bin")], Some(d.join("pf")), None, None, None).unwrap();
+        let found = find_with(&[d.join("bin")], Some(d.join("pf")), None, None).unwrap();
         assert_eq!(found.program, in_pf);
         std::fs::remove_dir_all(&d).unwrap();
     }

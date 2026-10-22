@@ -9,16 +9,35 @@ import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { base64ToBytes } from "../backend/base64";
-import type { Backend, SessionMsg } from "../backend/types";
+import { NO_PWSH, type Backend, type SessionMsg } from "../backend/types";
+import { ShellMissing } from "../components/ShellMissing";
 import { isAppShortcut } from "../shortcuts";
 import { clamp, effectiveFontSize, LIMITS, useSettings, type AppSettings } from "../state/settings";
-import { useStore } from "../state/store";
+import { newTabId, useStore } from "../state/store";
 import { useUi } from "../state/ui";
 import { xtermTheme, type Theme } from "../theme/theme";
 import { RemoteInput } from "./remoteInput";
 
 const terminals = new Map<string, { term: Terminal; fit: FitAddon; search: SearchAddon }>();
 export const getTerminal = (id: string) => terminals.get(id);
+
+/**
+ * 重画所有终端的字形。WebGL 渲染器的字形贴图是各终端共用的（字体、字号相同时），
+ * 一个终端清空贴图后，其它终端手里的字形位置就失效了，切回去会看到乱码。
+ * 所以任何一个终端清贴图，都要让全部终端重新生成一遍。
+ */
+export function redrawAll() {
+  for (const { term } of terminals.values()) redraw(term);
+}
+
+function redraw(term: Terminal) {
+  try {
+    term.clearTextureAtlas();
+  } catch {
+    // 默认渲染器没有贴图
+  }
+  term.refresh(0, term.rows - 1);
+}
 
 /** 去掉每行末尾的空格（终端用空格填满整行，复制出来很难看） */
 export function cleanCopy(text: string, trim = true): string {
@@ -55,6 +74,8 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
   const host = useRef<HTMLDivElement>(null);
   const settings = useSettings((s) => s.settings);
   const [paste, setPaste] = useState<string | null>(null);
+  /** 找不到 pwsh 7：这个标签页显示安装引导，不显示终端 */
+  const [missing, setMissing] = useState(false);
   const live = useRef({ settings, paste });
   live.current = { settings, paste };
 
@@ -90,7 +111,10 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     try {
       const gl = new WebglAddon();
       // 显卡驱动重置、远程桌面切换时 WebGL 会丢失，退回默认渲染器
-      gl.onContextLoss(() => gl.dispose());
+      gl.onContextLoss(() => {
+        gl.dispose();
+        redrawAll();
+      });
       term.loadAddon(gl);
     } catch (e) {
       console.warn("mooncli: WebGL 不可用，使用默认渲染器", e);
@@ -99,6 +123,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     fit.fit();
 
     const apply = useStore.getState().apply;
+    const launch = useStore.getState().tabs.find((t) => t.id === id)?.launch;
     const remoteInput = new RemoteInput(term);
     /** 远程相关的消息：顺手维护"输入起点"，命令开始时把屏幕上的文字读出来 */
     const onRemote = (msg: SessionMsg): SessionMsg => {
@@ -129,7 +154,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
       return msg;
     };
     backend
-      .create({ id, cols: term.cols, rows: term.rows, cwd: useStore.getState().tabs.find((t) => t.id === id)?.initialCwd }, (msg) => {
+      .create({ id, cols: term.cols, rows: term.rows, cwd: useStore.getState().tabs.find((t) => t.id === id)?.initialCwd, launch }, (msg) => {
         if (msg.type === "output") {
           term.write(base64ToBytes(msg.data), () => backend.ack(id, msg.bytes));
           return;
@@ -139,10 +164,28 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
           apply(id, onRemote(msg));
           if (msg.type === "exited") {
             term.write(`\r\n\x1b[90m[进程已退出，代码 ${msg.code ?? "未知"}]\x1b[0m\r\n`);
+            if (launch === "installPwsh") afterInstall();
           }
         });
       })
-      .catch((e) => term.write(`\x1b[31m启动 shell 失败：${String(e)}\x1b[0m\r\n`));
+      .catch((e) => {
+        if (String(e).includes(NO_PWSH)) setMissing(true);
+        else term.write(`\x1b[31m启动 shell 失败：${String(e)}\x1b[0m\r\n`);
+      });
+
+    // 安装 pwsh 7 的标签页结束后：重新检测，找到了就开一个新的 pwsh 7 标签页（安装记录留着给用户看）
+    const afterInstall = () =>
+      backend.shellStatus().then(
+        (st) => {
+          if (!st.pwsh) {
+            term.write("\x1b[33m还没有找到 PowerShell 7。可以关掉这个标签页再试一次，或者到 https://aka.ms/PSWindows 下载安装包。\x1b[0m\r\n");
+            return;
+          }
+          useUi.getState().showNotice("PowerShell 7 装好了");
+          useStore.getState().addTab(newTabId());
+        },
+        () => {},
+      );
 
     term.onData((d) => {
       remoteInput.onInput(d);
@@ -214,7 +257,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
-      if (isAppShortcut(e)) return false;
+      if (isAppShortcut(e, live.current.settings.keys)) return false;
       const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
       const k = e.key.toLowerCase();
       // Ctrl+C：有选中内容时复制，没有时照常发中断信号
@@ -280,8 +323,8 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     // 附带的 Nerd Font 符号字体和系统字体加载完后，重新测量字符宽度、重画字形
     const remeasure = () => {
       term.options.fontFamily = live.current.settings.font.family;
-      term.clearTextureAtlas();
       fit.fit();
+      redrawAll();
     };
     Promise.all([document.fonts?.load(`14px "mooncli Symbols"`, ""), document.fonts?.ready]).then(remeasure, remeasure);
 
@@ -307,7 +350,10 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     const before = `${t.term.options.fontSize}|${t.term.options.fontFamily}|${t.term.options.lineHeight}`;
     t.term.options = opts;
     if (before !== `${opts.fontSize}|${opts.fontFamily}|${opts.lineHeight}`) {
-      requestAnimationFrame(() => t.fit.fit());
+      requestAnimationFrame(() => {
+        t.fit.fit();
+        redrawAll();
+      });
     }
   }, [id, settings, theme, transparent]);
 
@@ -316,6 +362,8 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     if (active && t) {
       requestAnimationFrame(() => {
         t.fit.fit();
+        // 后台期间别的终端可能重建过共用的字形贴图，切回来先重画一遍
+        redraw(t.term);
         t.term.focus();
       });
     }
@@ -331,6 +379,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
   return (
     <div className={`term-layer${active ? " active" : ""}`} aria-hidden={!active}>
       <div className="term-host" ref={host} />
+      {missing && <ShellMissing tabId={id} backend={backend} />}
       {paste !== null && <PasteConfirm text={paste} onDone={confirmPaste} />}
     </div>
   );

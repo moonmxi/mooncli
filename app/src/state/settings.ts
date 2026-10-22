@@ -1,6 +1,7 @@
 // 设置：结构和默认值与 crates/mooncli-config/src/settings.rs 对应。
 // 界面持有完整设置；Rust 端保存到 settings.json，并只读取自己用得到的字段（shell、history）。
 import { create } from "zustand";
+import { cleanKeymap, type Keymap } from "../shortcuts";
 
 // 终端字体回退链，按顺序找字：英文等宽 → Nerd Font 图标 → 中文 → 彩色 emoji → 符号 → 系统等宽字体。
 // Noto Color Emoji 连 ASCII 的数字和 * # 都带，所以放在系统等宽字体之后，免得普通字符被它抢走。
@@ -44,7 +45,12 @@ export interface AppSettings {
     copyToast: boolean;
   };
   shell: { path: string | null; args: string[]; integration: boolean; useBundledConpty: boolean; adaptColors: boolean };
-  history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean };
+  /** keepDays：只保留最近多少天的历史，0 表示一直保留 */
+  history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean; keepDays: number };
+  /** 除了内置的 ssh、mosh、wsl……之外，也当作"连接服务器"的命令（写法和 ssh 一样，比如自己的别名） */
+  remote: { connectCommands: string[] };
+  /** 改过的快捷键（shortcuts.ts 的 Keymap） */
+  keys: Keymap;
 }
 
 export const SETTINGS_VERSION = 2;
@@ -81,7 +87,9 @@ export const DEFAULTS: AppSettings = {
     copyToast: true,
   },
   shell: { path: null, args: [], integration: true, useBundledConpty: true, adaptColors: true },
-  history: { enabled: true, ignorePatterns: [], importPsreadline: true },
+  history: { enabled: true, ignorePatterns: [], importPsreadline: true, keepDays: 0 },
+  remote: { connectCommands: [] },
+  keys: {},
 };
 
 export const LIMITS = {
@@ -123,6 +131,9 @@ export function mergeSettings(saved: unknown, defaults: AppSettings = DEFAULTS):
   // 迁移：第 1 版的"最低对比度"默认是 4.5，没改过的换成新的默认值 3
   const savedVersion = isPlain(saved) && typeof saved.version === "number" ? saved.version : 1;
   if (savedVersion < 2 && m.terminal.minimumContrastRatio === 4.5) m.terminal.minimumContrastRatio = defaults.terminal.minimumContrastRatio;
+  // 快捷键是"操作 → 按键列表"的表，默认值是空表，上面的通用合并会把它丢掉，单独处理
+  m.keys = cleanKeymap(isPlain(saved) ? saved.keys : undefined);
+  m.remote.connectCommands = m.remote.connectCommands.filter((c) => typeof c === "string" && /^[\w.-]{1,40}$/.test(c));
   m.version = SETTINGS_VERSION;
   m.zoom = clamp(m.zoom, LIMITS.zoom.min, LIMITS.zoom.max);
   m.uiScale = clamp(m.uiScale, LIMITS.uiScale.min, LIMITS.uiScale.max);

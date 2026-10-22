@@ -1,6 +1,7 @@
 // 历史面板（Ctrl+Shift+R）：找回、整理执行过的命令。设计见 docs/04 §3。
 // 左边是列表（可按目录、本标签页、收藏、成败、主机筛选），右边是选中命令的详情和每次执行的记录。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { Backend, HistoryDetail, HistoryHit, HistoryQuery, HostCount } from "../backend/types";
 import { dayGroup, duration, exitLabel, fullTime, relativeTime, shortDir } from "../history/format";
 import { useStore, type Tab } from "../state/store";
@@ -52,11 +53,85 @@ function ExitMark({ code }: { code: number | null }) {
   return <span className="hx-exit none" title={e.text}>·</span>;
 }
 
-export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab(cwd?: string): void }) {
+/** 面板只关心当前标签页的这几项。只取这些，标签页标题、计时之类的变化就不会让面板重新查询、重画 */
+interface TabView {
+  id?: string;
+  cwd?: string;
+  remoteHost?: string;
+  remoteConnected: boolean;
+  localHost?: string;
+  insertable: boolean;
+}
+
+const pickTab = (tab: Tab | undefined): TabView => ({
+  id: tab?.id,
+  cwd: tab?.remote ? tab.remote.cwd : tab?.cwd,
+  remoteHost: tab?.remote?.host,
+  remoteConnected: !!tab?.remote?.connected,
+  localHost: tab?.env?.host,
+  insertable: canInsert(tab),
+});
+
+const isRemote = (h: { host: string | null }, localHost?: string) =>
+  !!h.host && !!localHost && h.host.toLowerCase() !== localHost.toLowerCase();
+
+interface RowProps {
+  hit: HistoryHit;
+  index: number;
+  selected: boolean;
+  group: string | null;
+  dedupe: boolean;
+  remote: boolean;
+  onHover(i: number): void;
+  onPick(i: number, run: boolean | null): void;
+  onStar(i: number): void;
+}
+
+/** 一行。用 memo 包起来：移动选中、输入搜索词时只有变了的行重画 */
+const HistoryRow = memo(function HistoryRow({ hit: h, index: i, selected, group, dedupe, remote, onHover, onPick, onStar }: RowProps) {
+  return (
+    <div>
+      {group && <div className="pal-group">{group}</div>}
+      <div
+        role="option"
+        aria-selected={selected}
+        className={`hx-row${selected ? " sel" : ""}`}
+        onMouseMove={selected ? undefined : () => onHover(i)}
+        onClick={() => onPick(i, null)}
+        onDoubleClick={(e) => onPick(i, e.shiftKey)}
+      >
+        <ExitMark code={h.lastExit} />
+        <span className="hx-text">
+          <Highlight text={h.text} indices={h.matched} />
+        </span>
+        <span className="hx-where">
+          {remote && <span className="hx-host-tag">{h.host}</span>}
+          {shortDir(h.lastCwd)}
+        </span>
+        {dedupe && <span className="hx-count">{h.count > 1 ? `${h.count} 次` : ""}</span>}
+        <span className="hx-time">{relativeTime(h.lastUsed)}</span>
+        <button
+          type="button"
+          className={`hx-star${h.favorite ? " on" : ""}`}
+          aria-label={h.favorite ? "取消收藏" : "收藏"}
+          title={h.favorite ? "取消收藏 (Ctrl+S)" : "收藏 (Ctrl+S)"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onStar(i);
+          }}
+        >
+          <Icon name="star" size={13} />
+        </button>
+      </div>
+    </div>
+  );
+});
+
+export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab(cwd?: string): void }) {
   const open = useUi((s) => s.historyOpen);
   const setOpen = useUi((s) => s.setHistory);
-  const tab = useStore((s) => s.tabs.find((t) => t.id === s.activeId));
-  const localHost = tab?.env?.host;
+  const tab = useStore(useShallow((s) => pickTab(s.tabs.find((t) => t.id === s.activeId))));
+  const localHost = tab.localHost;
 
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<ScopeKey>("all");
@@ -80,7 +155,7 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
     setQuery("");
     setSel(0);
     setArmedDelete(null);
-    setHost(tab?.remote?.connected ? tab.remote.host : "");
+    setHost(tab.remoteConnected && tab.remoteHost ? tab.remoteHost : "");
     backend.historyHosts().then(setHosts, () => setHosts([]));
     requestAnimationFrame(() => input.current?.focus());
     // 只在打开时取一次
@@ -95,15 +170,15 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
     }
   }, [dedupe]);
 
+  const { id: tabId, cwd } = tab;
   const baseQuery = useMemo((): HistoryQuery => {
-    const cwd = tab?.remote ? tab.remote.cwd : tab?.cwd;
     return {
       text: query,
       scope:
         scope === "cwd" && cwd
           ? { kind: "cwd", value: cwd }
-          : scope === "tab" && tab
-            ? { kind: "session", value: tab.id }
+          : scope === "tab" && tabId
+            ? { kind: "session", value: tabId }
             : { kind: "all" },
       favoritesOnly: scope === "fav",
       successOnly: status === "ok",
@@ -112,10 +187,10 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
       dedupe,
       sort: query.trim() ? "relevance" : "recent",
       cwd: cwd ?? null,
-      sessionId: tab?.id ?? null,
+      sessionId: tabId ?? null,
       limit: 300,
     };
-  }, [query, scope, status, host, dedupe, tab]);
+  }, [query, scope, status, host, dedupe, tabId, cwd]);
 
   // 输入停顿 60ms 再查；没输入、看全部的时候，把收藏的单独放在最上面
   useEffect(() => {
@@ -165,12 +240,12 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
   }, [sel]);
 
   const close = useCallback(() => setOpen(false), [setOpen]);
-  const insertable = canInsert(tab);
+  const insertable = tab.insertable;
 
   const send = (h: HistoryHit | undefined, run: boolean) => {
-    if (!h || !tab || !insertable) return;
+    if (!h || !tabId || !insertable) return;
     close();
-    backend.write(tab.id, h.text + (run ? "\r" : ""));
+    backend.write(tabId, h.text + (run ? "\r" : ""));
   };
 
   const copy = (h: HistoryHit | undefined) => {
@@ -203,7 +278,19 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
     onNewTab(h.lastCwd);
   };
 
-  const isRemoteHit = (h: HistoryHit) => !!h.host && !!localHost && h.host.toLowerCase() !== localHost.toLowerCase();
+  const isRemoteHit = (h: HistoryHit) => isRemote(h, localHost);
+
+  // 给每一行的回调要保持不变（memo 才有用），所以通过 ref 拿最新的数据和函数
+  const live = useRef({ rows, send, toggleFav });
+  live.current = { rows, send, toggleFav };
+  const onHover = useCallback((i: number) => setSel(i), []);
+  const onPick = useCallback((i: number, run: boolean | null) => {
+    setSel(i);
+    if (run !== null) live.current.send(live.current.rows[i], run);
+  }, []);
+  const onStar = useCallback((i: number) => {
+    live.current.toggleFav(live.current.rows[i]);
+  }, []);
 
   if (!open) return null;
 
@@ -257,7 +344,7 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
   let lastGroup = "";
   const groupOf = (h: HistoryHit, i: number) => (i < favs.length ? "收藏" : searching ? "" : dayGroup(h.lastUsed));
   const remoteHosts = hosts.filter((h) => h.remote);
-  const cwdLabel = shortDir(tab?.remote ? tab.remote.cwd : tab?.cwd);
+  const cwdLabel = shortDir(cwd);
 
   return (
     <div className="pal-scrim hx-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -267,7 +354,7 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
           <input
             ref={input}
             value={query}
-            placeholder={tab?.remote?.connected ? `搜索历史命令（默认只看 ${tab.remote.host}）` : "搜索执行过的命令"}
+            placeholder={tab.remoteConnected ? `搜索历史命令（默认只看 ${tab.remoteHost}）` : "搜索执行过的命令"}
             aria-label="搜索历史命令"
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -353,42 +440,19 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
               const g = groupOf(h, i);
               const head = g && g !== lastGroup ? g : null;
               lastGroup = g;
-              const remote = isRemoteHit(h);
               return (
-                <div key={`${i < favs.length ? "f" : "h"}-${h.id}`}>
-                  {head && <div className="pal-group">{head}</div>}
-                  <div
-                    role="option"
-                    aria-selected={i === sel}
-                    className={`hx-row${i === sel ? " sel" : ""}`}
-                    onMouseMove={() => i !== sel && setSel(i)}
-                    onClick={() => setSel(i)}
-                    onDoubleClick={(e) => send(h, e.shiftKey)}
-                  >
-                    <ExitMark code={h.lastExit} />
-                    <span className="hx-text">
-                      <Highlight text={h.text} indices={h.matched} />
-                    </span>
-                    <span className="hx-where">
-                      {remote && <span className="hx-host-tag">{h.host}</span>}
-                      {shortDir(h.lastCwd)}
-                    </span>
-                    {dedupe && <span className="hx-count">{h.count > 1 ? `${h.count} 次` : ""}</span>}
-                    <span className="hx-time">{relativeTime(h.lastUsed)}</span>
-                    <button
-                      type="button"
-                      className={`hx-star${h.favorite ? " on" : ""}`}
-                      aria-label={h.favorite ? "取消收藏" : "收藏"}
-                      title={h.favorite ? "取消收藏 (Ctrl+S)" : "收藏 (Ctrl+S)"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleFav(h);
-                      }}
-                    >
-                      <Icon name="star" size={13} />
-                    </button>
-                  </div>
-                </div>
+                <HistoryRow
+                  key={`${i < favs.length ? "f" : "h"}-${h.id}`}
+                  hit={h}
+                  index={i}
+                  selected={i === sel}
+                  group={head}
+                  dedupe={dedupe}
+                  remote={isRemoteHit(h)}
+                  onHover={onHover}
+                  onPick={onPick}
+                  onStar={onStar}
+                />
               );
             })}
           </div>
@@ -490,4 +554,4 @@ export function HistoryPanel({ backend, onNewTab }: { backend: Backend; onNewTab
       </div>
     </div>
   );
-}
+});

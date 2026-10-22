@@ -55,7 +55,22 @@ ConPTY 输出 ──读线程──► 缓冲区 ──每 4ms 或满 64KB──
 
 ## 3. 启动 pwsh
 
-找 pwsh 的顺序：设置里指定的路径 → `PATH` 里的 `pwsh.exe` → 常见安装位置（`%ProgramFiles%\PowerShell\7\`、Microsoft Store 版、`winget` 安装位置）。都找不到时，引导用户安装 PowerShell 7，并允许临时用 Windows PowerShell 5.1。
+找 pwsh 的顺序：设置里指定的路径 → `PATH` 里的 `pwsh.exe` → 常见安装位置（`%ProgramFiles%\PowerShell\7\`、Microsoft Store 版、`winget` 安装位置）。都找不到时见下面的 §3.1。
+
+### 3.1 电脑上没有 PowerShell 7
+
+不崩溃，也**不悄悄换成** Windows 自带的 Windows PowerShell 5.1（那样用户只会看到"未集成"，不知道为什么）。标签页里显示一页说明（`app/src/components/ShellMissing.tsx`），给四条路，由用户选：
+
+| 选项 | 做什么 |
+| --- | --- |
+| **一键安装（推荐）** | 开一个标签页，用 Windows PowerShell 5.1 运行 `winget install --id Microsoft.PowerShell --exact --source winget`，过程全部显示出来。winget 结束后重新检测，找到 pwsh 7 就提示"装好了"并自动打开一个 pwsh 7 标签页；装失败时显示原因和官网下载地址。电脑上没有 winget（老版本 Windows 10）时不显示这一项 |
+| 去微软官网下载 | 用浏览器打开 `https://aka.ms/PSWindows`，自己装 .msi，装好后点"重新检测" |
+| 先用 Windows PowerShell 5.1 | 马上能用；集成脚本在 5.1 上也会尝试加载（脚本里 pwsh 7 才有的东西都做了判断），但功能可能不完整。状态栏显示"Windows PowerShell 5.1（临时）" |
+| 已经装了，指定位置 | 打开设置 → Shell，填 pwsh.exe 的路径 |
+
+- 底部的"重新检测"随时可点：检测时直接看 `%ProgramFiles%\PowerShell\7\pwsh.exe` 等固定位置，所以刚装好、PATH 还没刷新也找得到。
+- 设置里指定的路径没有文件时，说明里会额外提一句。
+- Rust 端：`find_shell` 只认 pwsh 7；`shell_status` 命令重新检测并报告 5.1 和 winget 在不在；`session_create` 找不到时返回以 `NO_PWSH` 开头的错误，界面据此显示说明页。
 
 启动命令：
 

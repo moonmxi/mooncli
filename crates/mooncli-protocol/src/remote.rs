@@ -16,12 +16,37 @@ pub struct ConnectTarget {
 
 /// 是交互式连接就返回目标；带了远程命令（`ssh host ls`）、只做端口转发（`ssh -N`）这类不算。
 pub fn parse_connect(command: &str) -> Option<ConnectTarget> {
+    parse_connect_with(command, &[])
+}
+
+/// 同上，`extra` 里的命令名也按 ssh 的写法识别（用户在设置里加的别名、自己写的脚本）。
+pub fn parse_connect_with(command: &str, extra: &[String]) -> Option<ConnectTarget> {
     let words = split_words(command.trim().trim_start_matches('&').trim_start());
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    parse_words(&words, extra)
+}
+
+fn parse_words(words: &[&str], extra: &[String]) -> Option<ConnectTarget> {
     let (prog, args) = words.split_first()?;
     let prog = program_name(prog);
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let args = args.to_vec();
+    if extra.iter().any(|e| e.eq_ignore_ascii_case(&prog)) {
+        return parse_ssh(&args).map(|t| ConnectTarget { via: prog.clone(), ..t });
+    }
     match prog.as_str() {
         "ssh" => parse_ssh(&args),
+        // sshp：常见的 ssh 包装（带密码管理、跳板机的脚本、别名），参数和 ssh 一样
+        "sshp" => parse_ssh(&args).map(|t| ConnectTarget { via: "sshp".into(), ..t }),
+        // sshpass -p 密码 ssh host：去掉 sshpass 自己的参数，看后面的命令
+        "sshpass" => {
+            let mut i = 0;
+            while i < args.len() && args[i].starts_with('-') {
+                // -p 密码、-f 文件、-d 描述符、-P 提示词 后面跟一个参数；也可能直接连着写（-pSECRET）
+                let takes_value = matches!(args[i], "-p" | "-f" | "-d" | "-P");
+                i += if takes_value { 2 } else { 1 };
+            }
+            parse_words(args.get(i..)?, extra)
+        }
         "mosh" | "et" => {
             let rest = positionals(&args, "");
             let dest = rest.first()?;
@@ -411,6 +436,22 @@ mod tests {
         ] {
             assert_eq!(parse_connect(c), None, "{c}");
         }
+    }
+
+    #[test]
+    fn ssh_wrappers_and_aliases() {
+        assert_eq!(host("sshp dev@10.0.0.5").unwrap(), ("sshp".into(), "10.0.0.5".into(), Some("dev".into())));
+        assert_eq!(host("sshp -p 2222 box").unwrap().1, "box");
+        assert_eq!(host("sshp box uptime"), None);
+        assert_eq!(host("sshpass -p secret ssh me@box").unwrap(), ("ssh".into(), "box".into(), Some("me".into())));
+        assert_eq!(host("sshpass -e ssh -p 22 box").unwrap().1, "box");
+        assert_eq!(host("sshpass -psecret ssh box ls"), None);
+        let extra = vec!["jump".to_string()];
+        assert_eq!(
+            parse_connect_with("jump -l root prod-1", &extra).unwrap(),
+            ConnectTarget { via: "jump".into(), host: "prod-1".into(), user: Some("root".into()) }
+        );
+        assert_eq!(parse_connect("jump prod-1"), None);
     }
 
     #[test]

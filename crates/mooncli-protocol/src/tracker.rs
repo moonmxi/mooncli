@@ -6,7 +6,7 @@
 //! 连接类命令（ssh、mosh、wsl……）单独处理（docs/06 §4.1）：连上就算这条命令完成，
 //! 之后用远程 shell 的标记或括号粘贴开关，分出在远程执行的一条条命令。
 
-use crate::remote::{ConnectTarget, looks_like_prompt, parse_connect};
+use crate::remote::{ConnectTarget, looks_like_prompt, parse_connect_with};
 use crate::scanner::{MarkKind, ShellEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -134,6 +134,8 @@ pub struct Tracker {
     integrated: bool,
     remote: Option<Remote>,
     remote_seq: u64,
+    /// 设置里加的、也算连接的命令名
+    connect_commands: Vec<String>,
 }
 
 impl Default for Tracker {
@@ -146,6 +148,7 @@ impl Default for Tracker {
             integrated: false,
             remote: None,
             remote_seq: 0,
+            connect_commands: Vec::new(),
         }
     }
 }
@@ -163,6 +166,10 @@ impl Tracker {
     /// 是否收到过本机集成脚本的标记。
     pub fn is_integrated(&self) -> bool {
         self.integrated
+    }
+
+    pub fn set_connect_commands(&mut self, names: Vec<String>) {
+        self.connect_commands = names;
     }
 
     /// 正在连接或已经连上的远程主机
@@ -260,7 +267,8 @@ impl Tracker {
                         self.base = ShellState::Running;
                         self.running_cmd = self.pending_cmd.take();
                         out.push(TrackerUpdate::CommandStarted { text: self.running_cmd.clone() });
-                        if let Some(target) = self.running_cmd.as_deref().and_then(parse_connect) {
+                        let extra = &self.connect_commands;
+                        if let Some(target) = self.running_cmd.as_deref().and_then(|c| parse_connect_with(c, extra)) {
                             out.push(TrackerUpdate::RemoteConnecting { target: target.clone() });
                             self.remote = Some(Remote {
                                 target,

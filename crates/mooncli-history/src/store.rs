@@ -304,6 +304,51 @@ impl Store {
         Ok(self.conn.execute("DELETE FROM commands WHERE cwd = ?1", [cwd])?)
     }
 
+    /// 删掉 `cutoff_ms` 之前的记录（"只保留最近 N 天"）。收藏不受影响。
+    pub fn prune_before(&self, cutoff_ms: i64) -> Result<usize> {
+        self.invalidate();
+        Ok(self.conn.execute("DELETE FROM commands WHERE started_at < ?1", [cutoff_ms])?)
+    }
+
+    /// 把整个库安全地复制一份（正在写入也没关系），导出备份时用。
+    pub fn backup_to(&self, path: &Path) -> Result<()> {
+        let _ = std::fs::remove_file(path);
+        self.conn.execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])?;
+        Ok(())
+    }
+
+    /// 把另一个历史库（导入的备份）合并进来：同一条命令、同一时间的记录只留一份。返回新加的条数。
+    pub fn merge_from(&self, path: &Path) -> Result<usize> {
+        self.invalidate();
+        self.conn.execute("ATTACH DATABASE ?1 AS src", [path.to_string_lossy().as_ref()])?;
+        let result = (|| -> Result<usize> {
+            let tx = self.conn.unchecked_transaction()?;
+            let n = tx.execute(
+                "INSERT INTO commands (text, cwd, exit_code, started_at, duration_ms, session_id, host, shell, source)
+                 SELECT s.text, s.cwd, s.exit_code, s.started_at, s.duration_ms, s.session_id, s.host, s.shell, s.source
+                 FROM src.commands s
+                 WHERE NOT EXISTS (SELECT 1 FROM main.commands c WHERE c.text = s.text AND c.started_at = s.started_at)",
+                [],
+            )?;
+            // 老版本的备份里没有收藏表
+            let has_favs: bool = tx.query_row(
+                "SELECT COUNT(*) > 0 FROM src.sqlite_master WHERE type = 'table' AND name = 'favorites'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_favs {
+                tx.execute(
+                    "INSERT OR IGNORE INTO main.favorites (text, added_at) SELECT text, added_at FROM src.favorites",
+                    [],
+                )?;
+            }
+            tx.commit()?;
+            Ok(n)
+        })();
+        self.conn.execute("DETACH DATABASE src", [])?;
+        result
+    }
+
     pub fn clear_all(&self) -> Result<usize> {
         self.invalidate();
         self.conn.execute("DELETE FROM favorites", [])?;
@@ -433,5 +478,27 @@ mod tests {
         let s = Store::open(&p).unwrap();
         s.set_favorite("old", true, 2).unwrap();
         assert_eq!(s.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn prune_backup_and_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Store::open_in_memory().unwrap();
+        for (t, at) in [("old", 10), ("new", 1000), ("new", 2000)] {
+            a.insert(&CommandRecord::new(t, at)).unwrap();
+        }
+        a.set_favorite("new", true, 1).unwrap();
+        let file = dir.path().join("copy.db");
+        a.backup_to(&file).unwrap();
+        assert_eq!(a.prune_before(500).unwrap(), 1);
+        assert_eq!(a.count().unwrap(), 2);
+
+        let b = Store::open_in_memory().unwrap();
+        b.insert(&CommandRecord::new("new", 1000)).unwrap();
+        // 已有的那条不重复加
+        assert_eq!(b.merge_from(&file).unwrap(), 2);
+        assert_eq!(b.count().unwrap(), 3);
+        assert!(b.favorites().unwrap().contains("new"));
+        assert_eq!(b.merge_from(&file).unwrap(), 0);
     }
 }

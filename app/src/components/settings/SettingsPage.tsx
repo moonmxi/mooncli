@@ -1,4 +1,4 @@
-// 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键。改动立即生效并自动保存。
+// 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键、数据与备份。改动立即生效并自动保存。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bytesToBase64 } from "../../backend/base64";
 import type { Backend, Diagnostics, SessionStats } from "../../backend/types";
@@ -19,6 +19,20 @@ import { BUILTIN_BACKGROUNDS, isBuiltin, renderBuiltin } from "../../theme/backg
 import { builtinThemes, type Theme } from "../../theme/theme";
 import { Icon } from "../Icons";
 import { Group, Row, Segmented, Select, Stepper, TextInput, Toggle } from "./controls";
+import { DataSection } from "./DataSection";
+import {
+  ACTIONS,
+  PRESETS,
+  actionDef,
+  assign,
+  bindingsOf,
+  comboFromEvent,
+  resetAction,
+  shellConflict,
+  unassign,
+  type ActionId,
+  type Keymap,
+} from "../../shortcuts";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "appearance", label: "外观", icon: "palette" },
@@ -27,6 +41,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "tabs", label: "标签栏", icon: "layout" },
   { id: "shell", label: "Shell 与诊断", icon: "info" },
   { id: "keys", label: "快捷键", icon: "keyboard" },
+  { id: "data", label: "数据与备份", icon: "folder" },
 ];
 
 type Update = (f: (d: AppSettings) => void) => void;
@@ -99,6 +114,7 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
           {section === "tabs" && <TabsSection s={settings} update={update} reset={reset} />}
           {section === "shell" && <ShellSection s={settings} update={update} backend={backend} />}
           {section === "keys" && <KeysSection />}
+          {section === "data" && <DataSection backend={backend} />}
           </div>
         </div>
       </div>
@@ -518,6 +534,22 @@ function ShellSection({ s, update, backend }: { s: AppSettings; update: Update; 
           <Toggle label="使用附带的 ConPTY" value={s.shell.useBundledConpty} onChange={(v) => update((d) => (d.shell.useBundledConpty = v))} />
         </Row>
       </Group>
+      <Group title="连接服务器">
+        <div className="set-hint">
+          运行 ssh、sshp、sshpass、mosh、wsl、docker exec -it 等命令时，连上就算这条命令完成，之后单独记录在服务器上执行的每条命令。自己写的 ssh 别名或脚本，可以加在下面。
+        </div>
+        <Row label="也算连接的命令" desc="写命令名，用逗号或空格隔开。参数按 ssh 的写法识别，比如 jump -l root prod-1">
+          <TextInput
+            label="也算连接的命令"
+            mono
+            placeholder="比如 jump, myssh"
+            value={s.remote.connectCommands.join(", ")}
+            onCommit={(v) =>
+              update((d) => (d.remote.connectCommands = [...new Set(v.split(/[\s,，]+/).map((x) => x.trim()).filter((x) => /^[\w.-]{1,40}$/.test(x)))]))
+            }
+          />
+        </Row>
+      </Group>
       <Group
         title="诊断"
         action={
@@ -566,37 +598,148 @@ export function diagnose(integrated: boolean | undefined, stats: SessionStats | 
 
 // ---- 快捷键 ----
 
-const KEYS: [string, string][] = [
-  ["新标签页", "Ctrl+Shift+T"],
-  ["关闭标签页", "Ctrl+Shift+W"],
-  ["下一个 / 上一个标签页", "Ctrl+Tab / Ctrl+Shift+Tab"],
+/** 固定的按键：不能改，列出来方便查 */
+const FIXED_KEYS: [string, string][] = [
   ["跳到第 N 个标签页", "Alt+1 … Alt+9"],
-  ["命令面板", "Ctrl+Shift+P"],
-  ["设置", "Ctrl+,"],
-  ["收起 / 展开标签栏", "Ctrl+Shift+B"],
-  ["放大 / 缩小 / 重置整体缩放", "Ctrl+= / Ctrl+- / Ctrl+0"],
   ["调终端字号", "Ctrl+滚轮"],
   ["复制（有选中时）", "Ctrl+C"],
   ["总是复制", "Ctrl+Shift+C"],
   ["粘贴", "Ctrl+V / Shift+Insert"],
   ["右键菜单", "Shift+右键"],
+  ["重命名（选中侧栏里的标签页时）", "F2"],
+];
+
+/** 历史面板里的按键（面板打开时才有效，不会挡住 shell） */
+const HISTORY_KEYS: [string, string][] = [
+  ["填入 / 直接运行", "Enter / Shift+Enter"],
+  ["复制、收藏", "Ctrl+C、Ctrl+S"],
+  ["在这条命令的目录打开新标签页", "Ctrl+O"],
+  ["删除（按两次）", "Shift+Del"],
+  ["切换范围：全部 / 当前目录 / 本标签页 / 收藏", "Alt+1 … Alt+4"],
+  ["合并重复", "Alt+D"],
+  ["详情（窄窗口）", "Tab"],
 ];
 
 function KeysSection() {
+  const keys = useSettings((s) => s.settings.keys);
+  const update = useSettings((s) => s.update);
+  const setRecordingKey = useUi((s) => s.setRecordingKey);
+  const [recording, setRecording] = useState<ActionId | null>(null);
+  const [message, setMessage] = useState<{ id: ActionId; text: string } | null>(null);
+
+  const setKeys = (k: Keymap) => update((d) => (d.keys = k));
+
+  // 录键：在捕获阶段拿到按键，不让它触发任何快捷键，也不交给终端
+  useEffect(() => {
+    setRecordingKey(recording !== null);
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        setRecording(null);
+        return;
+      }
+      const combo = comboFromEvent(e);
+      if (!combo) return; // 只按了修饰键，继续等
+      const { keymap, takenFrom } = assign(useSettings.getState().settings.keys, recording, combo);
+      setKeys(keymap);
+      const notes = [
+        takenFrom && `已从"${actionDef(takenFrom).label}"那里拿过来`,
+        shellConflict(combo) && `注意：${combo} 在终端里原本是"${shellConflict(combo)}"，设成快捷键后这个功能就用不了了`,
+      ].filter(Boolean);
+      setMessage(notes.length ? { id: recording, text: notes.join("；") } : null);
+      setRecording(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      setRecordingKey(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording]);
+
+  const presetOn = PRESETS.find((p) => JSON.stringify(p.keys) === JSON.stringify(keys))?.id;
+  const groups = [...new Set(ACTIONS.map((a) => a.group))];
+
   return (
-    <Group title="快捷键">
-      <div className="set-hint">这些快捷键在任何时候都由 mooncli 处理；其它按键都原样交给 shell，所以 TAB、Ctrl+R 等在 ssh、vim 里照常可用。自定义快捷键会在后续版本加入。</div>
-      <dl className="keys">
-        {KEYS.map(([k, v]) => (
-          <div key={k}>
-            <dt>{k}</dt>
-            <dd>
-              <kbd>{v}</kbd>
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </Group>
+    <>
+      <Group title="预设">
+        <div className="key-presets">
+          {PRESETS.map((p) => (
+            <button key={p.id} type="button" className={`key-preset${presetOn === p.id ? " on" : ""}`} onClick={() => setKeys(p.keys)}>
+              <strong>{p.label}</strong>
+              <span>{p.desc}</span>
+            </button>
+          ))}
+        </div>
+        <div className="set-hint">
+          快捷键在任何时候都由 mooncli 处理，其它按键原样交给 shell。所以默认都用 Ctrl+Shift 组合，不占用 shell、vim、tmux 里的键；想用 Ctrl+B 这类更顺手的键也可以，设的时候会提醒它原本的用途。
+        </div>
+      </Group>
+      {groups.map((g) => (
+        <Group key={g} title={g}>
+          {ACTIONS.filter((a) => a.group === g).map((a) => {
+            const list = bindingsOf(a.id, keys);
+            const changed = keys[a.id] !== undefined;
+            return (
+              <Row key={a.id} label={a.label} desc={message?.id === a.id ? <span className="key-warn">{message.text}</span> : undefined}>
+                <div className="key-row">
+                  {list.map((k) => (
+                    <span key={k} className={`key-chip${shellConflict(k) ? " risky" : ""}`} title={shellConflict(k) ? `在终端里原本是：${shellConflict(k)}` : undefined}>
+                      <kbd>{k}</kbd>
+                      <button type="button" aria-label={`去掉 ${k}`} onClick={() => setKeys(unassign(keys, a.id, k))}>
+                        <Icon name="close" size={11} />
+                      </button>
+                    </span>
+                  ))}
+                  {list.length === 0 && <span className="key-none">未设置</span>}
+                  <button
+                    type="button"
+                    className={`btn key-add${recording === a.id ? " recording" : ""}`}
+                    onClick={() => {
+                      setMessage(null);
+                      setRecording(recording === a.id ? null : a.id);
+                    }}
+                  >
+                    {recording === a.id ? "请按下新的快捷键…（Esc 取消）" : "+ 添加"}
+                  </button>
+                  {changed && (
+                    <button type="button" className="link-btn" title={`恢复为 ${a.defaults.join(" / ") || "未设置"}`} onClick={() => setKeys(resetAction(keys, a.id))}>
+                      恢复默认
+                    </button>
+                  )}
+                </div>
+              </Row>
+            );
+          })}
+        </Group>
+      ))}
+      <Group title="固定的按键">
+        <dl className="keys">
+          {FIXED_KEYS.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>
+                <kbd>{v}</kbd>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </Group>
+      <Group title="历史面板里">
+        <dl className="keys">
+          {HISTORY_KEYS.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>
+                <kbd>{v}</kbd>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </Group>
+    </>
   );
 }
 

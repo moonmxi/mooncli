@@ -11,7 +11,7 @@ import { StatusBar } from "./components/StatusBar";
 import { makeTabActions } from "./components/tabMenu";
 import { TitleBar } from "./components/TitleBar";
 import { computeLayout, PANEL, SIDEBAR } from "./layout/layout";
-import { matchShortcut } from "./shortcuts";
+import { keyHint, matchShortcut, type Action } from "./shortcuts";
 import {
   chooseTheme,
   clamp,
@@ -24,12 +24,11 @@ import {
   useSettings,
   zoomStep,
 } from "./state/settings";
-import { useStore } from "./state/store";
+import { newTabId, useStore } from "./state/store";
 import { useUi } from "./state/ui";
 import { TerminalView, getTerminal } from "./terminal/TerminalView";
 import { applyTheme, builtinThemes } from "./theme/theme";
 
-let tabCounter = 0;
 
 function measureCharWidth(family: string, size: number): number {
   const ctx = document.createElement("canvas").getContext("2d");
@@ -115,8 +114,7 @@ export function App() {
   }, []);
 
   const newTab = useCallback((cwd?: string) => {
-    tabCounter += 1;
-    useStore.getState().addTab(`tab-${Date.now().toString(36)}-${tabCounter}`, { cwd });
+    useStore.getState().addTab(newTabId(), { cwd });
   }, []);
 
   const closeTab = useCallback(
@@ -208,18 +206,17 @@ export function App() {
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
 
-  // 终端级快捷键：捕获阶段处理，这些键不会传给 shell
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const a = matchShortcut(e);
-      if (!a) return;
-      e.preventDefault();
-      e.stopPropagation();
+  // 所有能绑快捷键的操作（shortcuts.ts 的 ActionId），快捷键和命令面板都走这里
+  const runAction = useCallback(
+    (a: Action) => {
       const s = useStore.getState();
       const u = useUi.getState();
+      const cur = s.tabs.find((t) => t.id === s.activeId);
       switch (a.type) {
         case "newTab":
           return newTab();
+        case "duplicateTab":
+          return newTab(cur?.cwd);
         case "closeTab":
           return s.activeId && closeTab(s.activeId);
         case "nextTab":
@@ -228,47 +225,79 @@ export function App() {
           return s.cycle(-1);
         case "gotoTab":
           return s.activateIndex(a.index);
+        case "renameTab":
+          return s.activeId && s.setEditing(s.activeId);
+        case "pinTab":
+          return s.activeId && s.togglePin(s.activeId);
         case "toggleSidebar": {
           if (layoutRef.current.sidebar.mode === "drawer") return s.setDrawerOpen(!s.drawerOpen);
           const w = useSettings.getState().settings.tabs.sidebar.width;
           return useSettings.getState().update((d) => (d.tabs.sidebar.width = w <= SIDEBAR.collapsed ? s.lastOpenWidth : SIDEBAR.collapsed));
         }
-        case "zoom":
-          return zoom(a.dir);
+        case "zoomIn":
+          return zoom(1);
+        case "zoomOut":
+          return zoom(-1);
+        case "zoomReset":
+          return zoom(0);
+        case "fontBigger":
+          return fontStep(1);
+        case "fontSmaller":
+          return fontStep(-1);
         case "settings":
           return u.settings.open ? u.closeSettings() : u.openSettings();
         case "palette":
           return u.setPalette(!u.paletteOpen);
         case "history":
           return u.setHistory(!u.historyOpen);
-        case "find":
-          return; // 输出搜索框：后续版本
+        case "clearScreen":
+          return getTerminal(s.activeId ?? "")?.term.clear();
+        case "cycleTheme":
+          return cycleTheme();
+        case "copyCwd":
+          return cur?.cwd && copyText(cur.cwd);
       }
+    },
+    [newTab, closeTab, zoom, fontStep, cycleTheme, copyText],
+  );
+  const runRef = useRef(runAction);
+  runRef.current = runAction;
+
+  // 终端级快捷键：捕获阶段处理，这些键不会传给 shell。设置里正在录快捷键时不处理
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (useUi.getState().recordingKey) return;
+      const a = matchShortcut(e, useSettings.getState().settings.keys);
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      runRef.current(a);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [newTab, closeTab, zoom]);
+  }, []);
 
   const activeTab = tabs.find((t) => t.id === activeId);
 
+  const keys = settings.keys;
   const commands: PaletteCommand[] = useMemo(() => {
     const st = () => useStore.getState();
     const cur = () => st().tabs.find((t) => t.id === st().activeId);
     const list: PaletteCommand[] = [
-      { id: "new", group: "操作", label: "新建标签页", icon: "plus", hint: "Ctrl+Shift+T", keywords: ["new tab"], run: () => newTab() },
-      { id: "dup", group: "操作", label: "复制当前标签页（同一目录）", icon: "duplicate", keywords: ["duplicate"], run: () => newTab(cur()?.cwd) },
-      { id: "close", group: "操作", label: "关闭当前标签页", icon: "close", hint: "Ctrl+Shift+W", keywords: ["close"], run: () => st().activeId && closeTab(st().activeId!) },
-      { id: "rename", group: "操作", label: "重命名当前标签页", icon: "edit", hint: "F2", keywords: ["rename"], run: () => st().activeId && st().setEditing(st().activeId) },
-      { id: "pin", group: "操作", label: "置顶 / 取消置顶当前标签页", icon: "pin", keywords: ["pin"], run: () => st().activeId && st().togglePin(st().activeId!) },
-      { id: "copycwd", group: "操作", label: "复制当前目录路径", icon: "folder", keywords: ["copy path", "pwd"], run: () => cur()?.cwd && copyText(cur()!.cwd!) },
-      { id: "clear", group: "操作", label: "清除屏幕", icon: "eraser", keywords: ["clear", "cls"], run: () => getTerminal(st().activeId ?? "")?.term.clear() },
-      { id: "history", group: "操作", label: "历史命令", icon: "history", hint: "Ctrl+Shift+R", keywords: ["history", "recent commands"], run: () => useUi.getState().setHistory(true) },
-      { id: "settings", group: "操作", label: "打开设置", icon: "gear", hint: "Ctrl+,", keywords: ["settings", "preferences"], run: () => useUi.getState().openSettings() },
-      { id: "zin", group: "缩放", label: "放大", icon: "zoom", hint: "Ctrl+=", keywords: ["zoom in"], run: () => zoom(1) },
-      { id: "zout", group: "缩放", label: "缩小", icon: "zoom", hint: "Ctrl+-", keywords: ["zoom out"], run: () => zoom(-1) },
-      { id: "z0", group: "缩放", label: "恢复默认缩放", icon: "zoom", hint: "Ctrl+0", keywords: ["reset zoom"], run: () => zoom(0) },
-      { id: "fin", group: "缩放", label: "终端字号加大", icon: "text", hint: "Ctrl+滚轮", keywords: ["font bigger"], run: () => fontStep(1) },
-      { id: "fout", group: "缩放", label: "终端字号减小", icon: "text", hint: "Ctrl+滚轮", keywords: ["font smaller"], run: () => fontStep(-1) },
+      { id: "new", group: "操作", label: "新建标签页", icon: "plus", hint: keyHint("newTab", keys), keywords: ["new tab"], run: () => newTab() },
+      { id: "dup", group: "操作", label: "复制当前标签页（同一目录）", icon: "duplicate", hint: keyHint("duplicateTab", keys), keywords: ["duplicate"], run: () => newTab(cur()?.cwd) },
+      { id: "close", group: "操作", label: "关闭当前标签页", icon: "close", hint: keyHint("closeTab", keys), keywords: ["close"], run: () => st().activeId && closeTab(st().activeId!) },
+      { id: "rename", group: "操作", label: "重命名当前标签页", icon: "edit", hint: keyHint("renameTab", keys) ?? "F2", keywords: ["rename"], run: () => st().activeId && st().setEditing(st().activeId) },
+      { id: "pin", group: "操作", label: "置顶 / 取消置顶当前标签页", icon: "pin", hint: keyHint("pinTab", keys), keywords: ["pin"], run: () => st().activeId && st().togglePin(st().activeId!) },
+      { id: "copycwd", group: "操作", label: "复制当前目录路径", icon: "folder", hint: keyHint("copyCwd", keys), keywords: ["copy path", "pwd"], run: () => cur()?.cwd && copyText(cur()!.cwd!) },
+      { id: "clear", group: "操作", label: "清除屏幕", icon: "eraser", hint: keyHint("clearScreen", keys), keywords: ["clear", "cls"], run: () => getTerminal(st().activeId ?? "")?.term.clear() },
+      { id: "history", group: "操作", label: "历史命令", icon: "history", hint: keyHint("history", keys), keywords: ["history", "recent commands"], run: () => useUi.getState().setHistory(true) },
+      { id: "settings", group: "操作", label: "打开设置", icon: "gear", hint: keyHint("settings", keys), keywords: ["settings", "preferences"], run: () => useUi.getState().openSettings() },
+      { id: "zin", group: "缩放", label: "放大", icon: "zoom", hint: keyHint("zoomIn", keys), keywords: ["zoom in"], run: () => zoom(1) },
+      { id: "zout", group: "缩放", label: "缩小", icon: "zoom", hint: keyHint("zoomOut", keys), keywords: ["zoom out"], run: () => zoom(-1) },
+      { id: "z0", group: "缩放", label: "恢复默认缩放", icon: "zoom", hint: keyHint("zoomReset", keys), keywords: ["reset zoom"], run: () => zoom(0) },
+      { id: "fin", group: "缩放", label: "终端字号加大", icon: "text", hint: keyHint("fontBigger", keys) ?? "Ctrl+滚轮", keywords: ["font bigger"], run: () => fontStep(1) },
+      { id: "fout", group: "缩放", label: "终端字号减小", icon: "text", hint: keyHint("fontSmaller", keys) ?? "Ctrl+滚轮", keywords: ["font smaller"], run: () => fontStep(-1) },
       { id: "font", group: "缩放", label: "字体与缩放设置", icon: "text", keywords: ["font", "ui scale"], run: () => useUi.getState().openSettings("font") },
       {
         id: "pos",
@@ -300,7 +329,7 @@ export function App() {
       });
     }
     return list;
-  }, [tabs, newTab, closeTab, copyText, zoom, fontStep]);
+  }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys]);
 
   const sideDocked = layout.sidebar.mode === "docked";
   const chrome = Math.round(40 * ui);

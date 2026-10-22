@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchShortcut } from "./shortcuts";
+import { assign, bindingsOf, cleanKeymap, comboFromEvent, matchShortcut, PRESETS, shellConflict, unassign } from "./shortcuts";
 
 const key = (key: string, mods: Partial<{ ctrl: boolean; shift: boolean; alt: boolean }> = {}, code = "") => ({
   key,
@@ -19,11 +19,11 @@ describe("终端级快捷键", () => {
   });
 
   it("缩放、设置、命令面板", () => {
-    expect(matchShortcut(key("=", { ctrl: true }, "Equal"))).toEqual({ type: "zoom", dir: 1 });
-    expect(matchShortcut(key("+", { ctrl: true, shift: true }, "Equal"))).toEqual({ type: "zoom", dir: 1 });
-    expect(matchShortcut(key("-", { ctrl: true }, "Minus"))).toEqual({ type: "zoom", dir: -1 });
-    expect(matchShortcut(key("-", { ctrl: true }, "NumpadSubtract"))).toEqual({ type: "zoom", dir: -1 });
-    expect(matchShortcut(key("0", { ctrl: true }, "Digit0"))).toEqual({ type: "zoom", dir: 0 });
+    expect(matchShortcut(key("=", { ctrl: true }, "Equal"))).toEqual({ type: "zoomIn" });
+    expect(matchShortcut(key("+", { ctrl: true, shift: true }, "Equal"))).toEqual({ type: "zoomIn" });
+    expect(matchShortcut(key("-", { ctrl: true }, "Minus"))).toEqual({ type: "zoomOut" });
+    expect(matchShortcut(key("-", { ctrl: true }, "NumpadSubtract"))).toEqual({ type: "zoomOut" });
+    expect(matchShortcut(key("0", { ctrl: true }, "Digit0"))).toEqual({ type: "zoomReset" });
     expect(matchShortcut(key(",", { ctrl: true }, "Comma"))).toEqual({ type: "settings" });
     expect(matchShortcut(key("P", { ctrl: true, shift: true }, "KeyP"))).toEqual({ type: "palette" });
     expect(matchShortcut(key("R", { ctrl: true, shift: true }, "KeyR"))).toEqual({ type: "history" });
@@ -43,5 +43,30 @@ describe("终端级快捷键", () => {
     ]) {
       expect(matchShortcut(k)).toBeNull();
     }
+  });
+
+  it("自定义：改键、从别的操作拿走、预设", () => {
+    const ctrlB = key("b", { ctrl: true }, "KeyB");
+    expect(matchShortcut(ctrlB)).toBeNull();
+    const vs = PRESETS.find((p) => p.id === "vscode")!.keys;
+    expect(matchShortcut(ctrlB, vs)).toEqual({ type: "toggleSidebar" });
+    // 默认的 Ctrl+Shift+B 被预设整组替换掉了
+    expect(matchShortcut(key("B", { ctrl: true, shift: true }, "KeyB"), vs)).toBeNull();
+
+    const { keymap, takenFrom } = assign({}, "history", "Ctrl+Shift+P");
+    expect(takenFrom).toBe("palette");
+    expect(bindingsOf("palette", keymap)).toEqual([]);
+    expect(matchShortcut(key("P", { ctrl: true, shift: true }, "KeyP"), keymap)).toEqual({ type: "history" });
+    expect(bindingsOf("history", unassign(keymap, "history", "Ctrl+Shift+R"))).toEqual(["Ctrl+Shift+P"]);
+  });
+
+  it("按键写法和提醒", () => {
+    expect(comboFromEvent(key("Control", { ctrl: true }, "ControlLeft"))).toBeNull();
+    expect(comboFromEvent(key("F5", {}, "F5"))).toBe("F5");
+    expect(comboFromEvent(key("ArrowUp", { alt: true }, "ArrowUp"))).toBe("Alt+Up");
+    expect(shellConflict("Ctrl+B")).toContain("tmux");
+    expect(shellConflict("Ctrl+Shift+B")).toBeNull();
+    expect(shellConflict("Alt+Q")).not.toBeNull();
+    expect(cleanKeymap({ newTab: ["Ctrl+T", 3], bogus: ["x"] })).toEqual({ newTab: ["Ctrl+T"] });
   });
 });

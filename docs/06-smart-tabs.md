@@ -137,7 +137,9 @@
 
 | 命令 | 算 | 不算 |
 | --- | --- | --- |
-| `ssh` | `ssh box`、`ssh -p 2222 me@host`、`ssh -J jump host`、`ssh -t host tmux attach` | `ssh host ls`、`ssh -N -L …`（只转发端口）、`ssh -f`、`ssh -G` |
+| `ssh`、`sshp` | `ssh box`、`ssh -p 2222 me@host`、`ssh -J jump host`、`ssh -t host tmux attach` | `ssh host ls`、`ssh -N -L …`（只转发端口）、`ssh -f`、`ssh -G` |
+| `sshpass` | `sshpass -p 密码 ssh host`：去掉 sshpass 自己的参数，看后面的 ssh | 后面的命令不算连接时 |
+| 自己的别名、脚本 | 设置 → Shell 与诊断 → "也算连接的命令"里加上名字，参数按 ssh 的写法识别 | — |
 | `mosh`、`et`、`telnet`、`plink` | 连到一台主机 | `plink -m 文件` |
 | `wsl` | `wsl`、`wsl -d Ubuntu` | `wsl ls`、`wsl --shutdown` |
 | `docker` / `podman` / `kubectl exec` | `docker exec -it web bash`、`kubectl exec -it pod -- sh` | 不带 `-it`，或者执行的不是 shell |

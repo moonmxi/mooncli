@@ -4,6 +4,12 @@ import type { ProgramKind, SessionMsg, ShellState } from "../backend/types";
 import { SIDEBAR } from "../layout/layout";
 import { guessKind, type TitleParts } from "./title";
 
+/** 标签页里跑什么：平常是 pwsh 7；没装 pwsh 7 时可以临时用 Windows PowerShell 5.1，或者开一个安装 pwsh 7 的标签页 */
+export type LaunchMode = "pwsh" | "windowsPowerShell" | "installPwsh";
+
+let tabCounter = 0;
+export const newTabId = () => `tab-${Date.now().toString(36)}-${++tabCounter}`;
+
 export type Attention = "agent-waiting" | "agent-done" | "bell" | "notify" | "long-command";
 
 export interface Tab {
@@ -13,6 +19,7 @@ export interface Tab {
   cwd?: string;
   /** 新建时指定的起始目录（复制标签页时用） */
   initialCwd?: string;
+  launch?: LaunchMode;
   /** 连接到的远程主机（ssh、wsl、docker exec……）。connected 之前是"正在连接"（docs/06 §4.1） */
   remote?: RemoteInfo;
   shellState: ShellState;
@@ -68,7 +75,7 @@ interface State {
   lastOpenWidth: number;
   /** 正在改名的标签页 */
   editingId?: string;
-  addTab(id: string, opts?: { profile?: string; cwd?: string }): void;
+  addTab(id: string, opts?: { profile?: string; cwd?: string; launch?: LaunchMode }): void;
   closeTab(id: string): void;
   activate(id: string): void;
   cycle(delta: number): void;
@@ -97,7 +104,15 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({
         tabs: [
           ...s.tabs,
-          { id, profile: opts.profile ?? "日常", title: {}, shellState: "unknown", initialCwd: opts.cwd, cwd: opts.cwd },
+          {
+            id,
+            profile: opts.profile ?? "日常",
+            title: {},
+            shellState: "unknown",
+            initialCwd: opts.cwd,
+            cwd: opts.cwd,
+            launch: opts.launch,
+          },
         ],
         activeId: id,
       }));

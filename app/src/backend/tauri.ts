@@ -1,7 +1,19 @@
 // 真正的后端：通过 Tauri 调 Rust 主程序（app/src-tauri/src/session.rs）。
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { Backend, CreateOptions, Diagnostics, HistoryDetail, HistoryHit, HostCount, SessionMsg, SessionStats } from "./types";
+import type {
+  Backend,
+  CreateOptions,
+  DataOverview,
+  Diagnostics,
+  HistoryDetail,
+  HistoryHit,
+  HostCount,
+  ImportSummary,
+  SessionMsg,
+  SessionStats,
+  ShellStatus,
+} from "./types";
 
 const log = (what: string) => (e: unknown) => console.error(`mooncli: ${what}失败`, e);
 
@@ -18,6 +30,22 @@ export function tauriBackend(): Backend {
     backgroundList: () => invoke<string[]>("background_list"),
     backgroundDelete: (name) => invoke("background_delete", { name }),
     diagnostics: () => invoke<Diagnostics>("diagnostics"),
+    shellStatus: () => invoke<ShellStatus>("shell_status"),
+    openUrl: (url) => invoke("open_url", { url }),
+    dataOverview: () => invoke<DataOverview>("data_overview"),
+    dataBackupNow: () => invoke<string | null>("data_backup_now"),
+    dataRestoreBackup: (name) => invoke("data_restore_backup", { name }),
+    settingsReset: () => invoke("settings_reset"),
+    dataExport: (includeHistory) => {
+      // 文件名里用本地时间：mooncli-backup-20261022-1530.zip
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, "0");
+      const label = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+      return invoke<string>("data_export", { includeHistory, label });
+    },
+    dataImport: (dataBase64, includeHistory) => invoke<ImportSummary>("data_import", { dataBase64, includeHistory }),
+    dataReveal: (target) => invoke("data_reveal", { target }),
+    historyPrune: (days) => invoke<number>("history_prune", { days }),
     sessionStats: (id) => invoke<SessionStats>("session_stats", { id }),
     historySearch: (text, opts) =>
       invoke<HistoryHit[]>("history_search", {
@@ -37,7 +65,8 @@ export function tauriBackend(): Backend {
     async create(opts: CreateOptions, onMsg: (m: SessionMsg) => void) {
       const channel = new Channel<SessionMsg>();
       channel.onmessage = onMsg;
-      await invoke("session_create", { ...opts, channel });
+      const { launch, ...rest } = opts;
+      await invoke("session_create", { ...rest, launchMode: launch ?? null, channel });
     },
     write(id, data) {
       invoke("session_write", { id, data }).catch(log("发送输入"));
