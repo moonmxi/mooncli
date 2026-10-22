@@ -122,7 +122,9 @@ fn backup(path: &std::path::Path) -> Result<(), String> {
         path.file_name().and_then(|n| n.to_str()).unwrap_or("config"),
         stamp
     ));
-    std::fs::copy(path, &backup).map_err(|e| format!("备份 {} 失败：{e}", path.display()))
+    std::fs::copy(path, &backup)
+        .map(|_| ())
+        .map_err(|e| format!("备份 {} 失败：{e}", path.display()))
 }
 
 #[tauri::command]
