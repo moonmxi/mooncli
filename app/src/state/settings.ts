@@ -49,12 +49,11 @@ export interface AppSettings {
   history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean; keepDays: number };
   /** 除了内置的 ssh、mosh、wsl……之外，也当作"连接服务器"的命令（写法和 ssh 一样，比如自己的别名） */
   remote: { connectCommands: string[] };
-  /** Agent 用量小窗（docs/07）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
+  /** Agent 用量小窗（docs/07，只做 Codex）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
   agent: {
     enabled: boolean;
     readSessionFiles: boolean;
-    receiveStatusline: boolean;
-    receiveHooks: boolean;
+    receiveNotify: boolean;
     widget: {
       anchor: "bottom-right" | "bottom-left" | "top-right" | "top-left";
       opacity: number;
@@ -106,8 +105,7 @@ export const DEFAULTS: AppSettings = {
   agent: {
     enabled: false,
     readSessionFiles: true,
-    receiveStatusline: true,
-    receiveHooks: true,
+    receiveNotify: true,
     widget: { anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
   },
   keys: {},

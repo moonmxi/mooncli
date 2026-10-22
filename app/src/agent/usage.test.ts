@@ -52,11 +52,11 @@ describe("formatElapsed", () => {
 
 const report: UsageReport = {
   sessions: [
-    { kind: "claude", sessionId: "s-old", cwd: "C:\\work\\a", state: "unknown", updatedAt: 100, source: "sessionFile" },
-    { kind: "codex", sessionId: "s-tab", tabSessionId: "tab-1", cwd: "C:\\work\\b", state: "running", updatedAt: 90, source: "sessionFile" },
-    { kind: "claude", sessionId: "s-dir", cwd: "c:/work/b/", state: "waiting", updatedAt: 95, source: "statusLine" },
+    { kind: "codex", sessionId: "s-old", cwd: "C:\\work\\a", state: "unknown", updatedAt: 100 },
+    { kind: "codex", sessionId: "s-tab", tabSessionId: "tab-1", cwd: "C:\\work\\b", state: "running", updatedAt: 90 },
+    { kind: "codex", sessionId: "s-dir", cwd: "c:/work/b/", state: "waiting", updatedAt: 95 },
   ],
-  accounts: [{ kind: "codex", updatedAt: 90, source: "sessionFile" }],
+  accounts: [{ kind: "codex", updatedAt: 90 }],
 };
 
 describe("pickSession", () => {
@@ -78,8 +78,8 @@ describe("pickSession", () => {
   it("没有会话时为空", () => {
     expect(pickSession({ sessions: [], accounts: [] })).toBeNull();
   });
-  it("accountFor 按 kind 找", () => {
+  it("accountFor 找到账号用量", () => {
     expect(accountFor(report, "codex")?.kind).toBe("codex");
-    expect(accountFor(report, "claude")).toBeUndefined();
+    expect(accountFor({ sessions: [], accounts: [] }, "codex")).toBeUndefined();
   });
 });

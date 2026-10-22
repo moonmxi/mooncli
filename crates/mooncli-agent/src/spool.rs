@@ -1,9 +1,6 @@
 //! mooncli-bridge 与主进程之间的交接目录（spool）：在 mooncli 的 agent 数据目录下，
-//! bridge 把官方扩展点送来的数据写成一个个小 JSON 文件，主进程只读。
-//! 文件名：
-//! - `claude-status-<session_id>.json`：statusLine 的最近一次输入（原样保存 payload）
-//! - `claude-hook-<session_id>.json`：hooks 的最近一次事件
-//! - `codex-notify-<thread_id>.json`：Codex notify 的最近一次触发（只作刷新信号）
+//! bridge 把 Codex notify 送来的事件写成小 JSON 文件，主进程只读。
+//! 文件名：`codex-notify-<thread_id>.json`（该会话最近一次 notify 触发）。
 //! 每个文件的内容都是 `{ receivedAt, tabSessionId?, payload }`。
 
 use std::path::{Path, PathBuf};
@@ -21,14 +18,6 @@ pub struct SpoolEntry {
     pub tab_session_id: Option<String>,
     /// 扩展点送来的原始 JSON
     pub payload: Value,
-}
-
-pub fn status_file_name(session_id: &str) -> String {
-    format!("claude-status-{}.json", sanitize(session_id))
-}
-
-pub fn hook_file_name(session_id: &str) -> String {
-    format!("claude-hook-{}.json", sanitize(session_id))
 }
 
 pub fn codex_notify_file_name(thread_id: &str) -> String {
@@ -63,9 +52,7 @@ pub fn list_entries(agent_dir: &Path, prefix: &str) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".json"))
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix) && n.ends_with(".json"))
         })
         .collect()
 }

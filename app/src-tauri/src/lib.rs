@@ -84,11 +84,8 @@ fn session_create(
             .clone()
             .ok_or_else(|| format!("{NO_PWSH}: 没有找到 PowerShell 7（pwsh.exe）"))?,
     };
-    let agent_dir_string = if settings.agent.enabled {
-        agent::agent_dir(&state).display().to_string()
-    } else {
-        String::new()
-    };
+    let agent_dir_string =
+        if settings.agent.enabled { agent::agent_dir(&state).display().to_string() } else { String::new() };
     let opts = if launch_mode.as_deref() == Some("installPwsh") {
         install_pwsh_launch(&shell, cwd, cols, rows)
     } else {

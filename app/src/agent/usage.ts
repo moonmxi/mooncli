@@ -3,7 +3,7 @@
 import type { AgentAccountUsage, AgentKind, AgentSessionUsage, UsageReport } from "../backend/types";
 import type { Tab } from "../state/store";
 
-export const KIND_LABEL: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+export const KIND_LABEL: Record<AgentKind, string> = { codex: "Codex" };
 
 /** 窗口长度 → 显示名。认分钟数不认套餐：300 是 5 小时，10080 是一周，其它照实说。 */
 export function windowLabel(windowMinutes?: number): string {

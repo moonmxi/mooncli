@@ -146,12 +146,12 @@ export interface HostCount {
   remote: boolean;
 }
 
-// ---- Agent 用量（crates/mooncli-agent 的 UsageReport，一一对应） ----
+// ---- Agent 用量（crates/mooncli-agent 的 UsageReport，一一对应；只做 Codex） ----
 
-export type AgentKind = "claude" | "codex";
+export type AgentKind = "codex";
 
 export interface RateWindow {
-  /** 已用百分比 0–100；estimated 时这个数不作数，看 windowTokens */
+  /** 已用百分比 0–100（后端下发、Codex 落盘的官方快照值） */
   usedPercent: number;
   windowMinutes?: number;
   /** 重置时刻（Unix epoch 秒） */
@@ -165,7 +165,6 @@ export interface AgentContextUsage {
 }
 
 export type AgentSessionState = "running" | "waiting" | "done" | "unknown";
-export type AgentSnapshotSource = "statusLine" | "sessionFile" | "estimate";
 
 export interface AgentSessionUsage {
   kind: AgentKind;
@@ -174,11 +173,9 @@ export interface AgentSessionUsage {
   cwd?: string;
   model?: string;
   context?: AgentContextUsage;
-  costUsd?: number;
   state: AgentSessionState;
   /** 快照时刻（epoch 秒） */
   updatedAt: number;
-  source: AgentSnapshotSource;
 }
 
 export interface AgentAccountUsage {
@@ -186,10 +183,7 @@ export interface AgentAccountUsage {
   primary?: RateWindow;
   secondary?: RateWindow;
   plan?: string;
-  /** 估算模式下当前窗口内累计 token 数 */
-  windowTokens?: number;
   updatedAt: number;
-  source: AgentSnapshotSource;
 }
 
 export interface UsageReport {
@@ -198,9 +192,7 @@ export interface UsageReport {
 }
 
 export interface IntegrationStatus {
-  claude: boolean;
   codex: boolean;
-  claudeSettingsPath: string;
   codexConfigPath: string;
 }
 
@@ -208,7 +200,6 @@ export interface IntegrationOutcome {
   changes: string[];
 }
 
-export type IntegrationTarget = "claude" | "codex";
 export type IntegrationAction = "integrate" | "unintegrate";
 
 export interface Backend {
@@ -246,10 +237,10 @@ export interface Backend {
   /** mooncli-bridge 的路径，设置页「一键接入」展示用 */
   agentBridgePath(): Promise<string>;
   agentIntegrationStatus(): Promise<IntegrationStatus>;
-  /** 预览接入/断开会改什么（不落盘） */
-  agentIntegrationPreview(target: IntegrationTarget, action: IntegrationAction): Promise<IntegrationOutcome>;
+  /** 预览接入/断开 Codex notify 会改什么（不落盘） */
+  agentIntegrationPreview(action: IntegrationAction): Promise<IntegrationOutcome>;
   /** 执行接入/断开（改前自动备份原文件） */
-  agentIntegrationApply(target: IntegrationTarget, action: IntegrationAction): Promise<IntegrationOutcome>;
+  agentIntegrationApply(action: IntegrationAction): Promise<IntegrationOutcome>;
   historySearch(text: string, opts?: { cwd?: string; limit?: number }): Promise<HistoryHit[]>;
   /** 历史面板用的完整查询 */
   historyQuery(q: HistoryQuery): Promise<HistoryHit[]>;

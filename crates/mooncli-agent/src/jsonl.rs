@@ -44,11 +44,7 @@ pub fn first_line(path: &Path) -> Option<String> {
             break; // 第一行不该这么长，防异常文件
         }
     }
-    if buf.is_empty() {
-        None
-    } else {
-        Some(String::from_utf8_lossy(&buf).into_owned())
-    }
+    if buf.is_empty() { None } else { Some(String::from_utf8_lossy(&buf).into_owned()) }
 }
 
 /// 递归收集目录下所有 `.jsonl` 文件（`.jsonl.zst` 压缩文件 v1 先跳过）。

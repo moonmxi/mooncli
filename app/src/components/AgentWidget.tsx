@@ -120,19 +120,11 @@ export function AgentWidget({ backend }: { backend: Backend }) {
       {account && (account.primary || account.secondary) && (
         <>
           <div className="aw-divider" />
-          {account.primary &&
-            (account.primary.estimated ? (
-              // 估算模式不编百分比（docs/07 第 2 节）：只报 token 数和重置时间
-              <div className="aw-row">
-                <span className="aw-name">{windowLabel(account.primary.windowMinutes)}</span>
-                <span className="aw-track-text">约 {formatTokens(account.windowTokens ?? 0)} tokens · 本地估算</span>
-                <span className="aw-num">{formatResetIn(account.primary.resetsAt, nowSec) ?? ""}</span>
-              </div>
-            ) : (
-              <div className="aw-row">
-                <WindowRow label={windowLabel(account.primary.windowMinutes)} w={account.primary} nowSec={nowSec} warnAt={warnAt} dangerAt={dangerAt} />
-              </div>
-            ))}
+          {account.primary && (
+            <div className="aw-row">
+              <WindowRow label={windowLabel(account.primary.windowMinutes)} w={account.primary} nowSec={nowSec} warnAt={warnAt} dangerAt={dangerAt} />
+            </div>
+          )}
           {account.secondary && (
             <div className="aw-row">
               <WindowRow label={windowLabel(account.secondary.windowMinutes)} w={account.secondary} nowSec={nowSec} warnAt={warnAt} dangerAt={dangerAt} />
