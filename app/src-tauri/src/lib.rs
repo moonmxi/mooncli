@@ -4,6 +4,8 @@ mod agent;
 mod conpty;
 mod data;
 mod files;
+mod fonts;
+mod logs;
 mod session;
 
 use std::collections::HashMap;
@@ -258,8 +260,21 @@ fn settings_get(state: State<'_, AppState>) -> serde_json::Value {
     state.settings.lock().unwrap().clone()
 }
 
+/// 写进 settings.json 的 JSON Schema 地址：编辑器打开文件时有补全和检查（schema/settings.schema.json）
+const SETTINGS_SCHEMA: &str = "https://raw.githubusercontent.com/moonmxi/mooncli/main/schema/settings.schema.json";
+
+fn with_schema(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut()
+        && !obj.contains_key("$schema")
+    {
+        obj.insert("$schema".into(), serde_json::Value::String(SETTINGS_SCHEMA.into()));
+    }
+    value
+}
+
 #[tauri::command]
 fn settings_set(state: State<'_, AppState>, value: serde_json::Value) -> CmdResult<()> {
+    let value = with_schema(value);
     // 先按 Rust 端的结构检查一遍类型，写错了就拒绝，不把坏文件写到磁盘上
     let typed: Settings = serde_json::from_value(value.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
     let shell_changed = typed.shell.path != state.typed_settings().shell.path;
@@ -274,6 +289,7 @@ fn settings_set(state: State<'_, AppState>, value: serde_json::Value) -> CmdResu
     if shell_changed {
         *state.shell.lock().unwrap() = find_shell(typed.shell.path.as_deref());
     }
+    agent::sync_notify_prefs(&state);
     Ok(())
 }
 
@@ -328,6 +344,7 @@ fn replace_settings(
     reason: &str,
 ) -> CmdResult<serde_json::Value> {
     let _: Settings = serde_json::from_value(value.clone()).map_err(|e| format!("设置格式不对：{e}"))?;
+    let value = with_schema(value);
     data::snapshot_settings(&state.data, reason).map_err(|e| format!("备份当前设置失败：{e}"))?;
     let text = serde_json::to_string_pretty(&value).map_err(err)?;
     *state.settings.lock().unwrap() = value.clone();
@@ -433,7 +450,10 @@ fn data_reveal(state: State<'_, AppState>, target: String) -> CmdResult<()> {
         other => {
             let p = PathBuf::from(other);
             let ok = p.parent() == Some(d.export_dir.as_path())
-                && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("mooncli-backup-"));
+                && p.file_name().is_some_and(|n| {
+                    let n = n.to_string_lossy();
+                    n.starts_with("mooncli-backup-") || n.starts_with("mooncli-logs-")
+                });
             if !ok {
                 return Err("只能打开 mooncli 自己的文件夹".into());
             }
@@ -537,6 +557,20 @@ fn diagnostics(state: State<'_, AppState>) -> Diagnostics {
     }
 }
 
+/// 界面里的错误（未捕获的异常等）记进本机日志
+#[tauri::command]
+fn log_error(state: State<'_, AppState>, message: String) {
+    let message: String = message.chars().take(4000).collect();
+    logs::append(&state.data.data_dir, "error", &message);
+}
+
+/// 把日志和诊断信息打成 zip 放到下载文件夹，返回路径（用户反馈问题时附上）
+#[tauri::command]
+fn logs_pack(state: State<'_, AppState>, label: String) -> CmdResult<String> {
+    let diag = serde_json::to_value(diagnostics(state.clone())).map_err(err)?;
+    logs::pack(&state.data.data_dir, &state.data.export_dir, &diag, &label).map(|p| p.display().to_string())
+}
+
 /// 系统版本号，比如 "10.0.19045.5011"。Windows 10 和较早的 Windows 11 自带的 ConPTY 会吞掉集成标记。
 fn os_version() -> String {
     #[cfg(windows)]
@@ -601,12 +635,12 @@ pub fn run() {
     tauri::Builder::default()
         // 记住主窗口的位置、大小、是否最大化（独立的 Agent 小窗不记）
         .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&["agent"]).build())
-        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_local_data_dir()?;
             std::fs::create_dir_all(&config_dir)?;
             std::fs::create_dir_all(&data_dir)?;
+            logs::install_panic_hook(data_dir.clone());
             let settings_path = config_dir.join("settings.json");
             let settings = files::read_settings(&settings_path);
             let typed: Settings = serde_json::from_value(settings.clone()).unwrap_or_default();
@@ -652,6 +686,7 @@ pub fn run() {
                 data: data_paths,
                 agent: Arc::default(),
             });
+            agent::start_alerts(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -660,9 +695,11 @@ pub fn run() {
             agent::agent_refresh_live,
             agent::agent_window_toggle,
             agent::agent_bridge_path,
+            fonts::system_fonts,
             agent::agent_integration_status,
             agent::agent_integration_preview,
             agent::agent_integration_apply,
+            agent::notify_toast,
             session_write,
             session_resize,
             session_ack,
@@ -692,7 +729,9 @@ pub fn run() {
             data_export,
             data_import,
             data_reveal,
-            history_prune
+            history_prune,
+            log_error,
+            logs_pack
         ])
         .run(tauri::generate_context!())
         .expect("启动 mooncli 失败");

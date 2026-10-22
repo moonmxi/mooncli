@@ -236,8 +236,11 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       }
       return msg;
     };
+    // 这个终端被卸载后（关标签页、开发时热更新），旧会话迟到的消息（比如它的退出）不能再算到同一个 id 上
+    let alive = true;
     backend
       .create({ id, cols: term.cols, rows: term.rows, cwd: useStore.getState().tabs.find((t) => t.id === id)?.initialCwd, launch }, (msg) => {
+        if (!alive) return;
         if (msg.type === "output") {
           term.write(base64ToBytes(msg.data), () => backend.ack(id, msg.bytes));
           return;
@@ -451,6 +454,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
     Promise.all([document.fonts?.load(`14px "mooncli Symbols"`, ""), document.fonts?.ready]).then(remeasure, remeasure);
 
     return () => {
+      alive = false;
       ro.disconnect();
       clearTimeout(resizeTimer);
       el.removeEventListener("mouseup", onMouseUp);

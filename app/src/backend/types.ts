@@ -148,7 +148,7 @@ export interface HostCount {
   remote: boolean;
 }
 
-// ---- Agent 用量（crates/mooncli-agent 的 UsageReport，一一对应） ----
+// ---- Agent 额度与提醒（crates/mooncli-agent，一一对应） ----
 
 export type AgentKind = "claude" | "codex";
 
@@ -161,43 +161,60 @@ export interface RateWindow {
   windowMinutes?: number;
   /** 重置时刻（Unix epoch 秒） */
   resetsAt?: number;
-  estimated: boolean;
+}
+
+export interface AgentAccountUsage {
+  kind: AgentKind;
+  fiveHour?: RateWindow;
+  sevenDay?: RateWindow;
+  plan?: string;
+  /** 数据时刻（epoch 秒） */
+  updatedAt: number;
+  source: SnapshotSource;
 }
 
 export interface AgentContextUsage {
   usedTokens: number;
   windowTokens: number;
+  /** 和 Agent 自己显示的口径一致的百分比 */
+  usedPercent: number;
 }
 
-export type AgentSessionState = "running" | "waiting" | "done" | "unknown";
-
-export interface AgentSessionUsage {
+/** 当前标签页里正在跑的 Agent 会话 */
+export interface AgentCurrentSession {
   kind: AgentKind;
-  sessionId: string;
-  tabSessionId?: string;
-  cwd?: string;
   model?: string;
+  /** 还没有第一轮回复时为空 */
   context?: AgentContextUsage;
-  state: AgentSessionState;
-  /** 快照时刻（epoch 秒） */
   updatedAt: number;
-  source: SnapshotSource;
-}
-
-export interface AgentAccountUsage {
-  kind: AgentKind;
-  primary?: RateWindow;
-  secondary?: RateWindow;
-  plan?: string;
-  updatedAt: number;
-  source: SnapshotSource;
 }
 
 export interface UsageReport {
-  sessions: AgentSessionUsage[];
   accounts: AgentAccountUsage[];
+  current?: AgentCurrentSession | null;
   /** 实时额度最近一次查询失败的原因 */
   liveError?: string | null;
+  /** Claude Code 接入了 statusLine 没有（没接入拿不到它的额度） */
+  claudeIntegrated: boolean;
+}
+
+/** 当前标签页里正在跑哪个 Agent：只为它找上下文 */
+export interface AgentFocus {
+  kind: AgentKind;
+  tabId: string;
+  cwd?: string;
+  /** Agent 开始运行的时刻（毫秒） */
+  sinceMs: number;
+}
+
+/** bridge 交来的完成提醒（Agent 跑在 mooncli 标签页里时） */
+export interface AgentAlert {
+  kind: AgentKind;
+  event: "done" | "waiting";
+  title: string;
+  body: string;
+  tabSessionId?: string;
+  at: number;
 }
 
 export interface IntegrationStatus {
@@ -230,6 +247,12 @@ export interface Backend {
   diagnostics(): Promise<Diagnostics>;
   /** 重新找一遍 shell（刚装好 pwsh 7 时用） */
   shellStatus(): Promise<ShellStatus>;
+  /** 界面里的错误记进本机日志 */
+  logError(message: string): void;
+  /** 把日志和诊断信息打包成 zip，返回路径 */
+  logsPack(): Promise<string>;
+  /** 系统里装的字体家族名（设置页挑等宽字体用） */
+  systemFonts(): Promise<string[]>;
   /** 用系统浏览器打开 https 网址 */
   openUrl(url: string): Promise<void>;
   // ---- 数据管理（app/src-tauri/src/data.rs） ----
@@ -247,11 +270,11 @@ export interface Backend {
   /** 删掉 days 天前的命令历史；0 表示全部删掉。返回删掉的条数 */
   historyPrune(days: number): Promise<number>;
   sessionStats(id: string): Promise<SessionStats>;
-  /** Agent 用量小窗的数据（docs/07，Claude Code 与 Codex）；功能没开时后端返回空报告 */
-  agentUsage(): Promise<UsageReport>;
+  /** 两个 Agent 的额度，以及 focus 指定的当前会话的上下文（docs/07） */
+  agentUsage(focus?: AgentFocus): Promise<UsageReport>;
   /** 立刻通过 codex app-server 重新查一次实时额度 */
   agentRefreshLive(): Promise<void>;
-  /** 打开 / 关闭独立的置顶用量小窗 */
+  /** 打开 / 关闭独立的置顶额度小窗 */
   agentWindow(open: boolean): Promise<void>;
   /** mooncli-bridge 的路径，设置页「一键接入」展示用 */
   agentBridgePath(): Promise<string>;
@@ -278,8 +301,13 @@ export interface Backend {
   close(id: string): void;
   /** 设置文件被外部修改（热更新）；error 是写坏时的出错信息。返回取消订阅函数 */
   onSettingsFile(cb: (e: { value?: unknown; error?: string }) => void): () => void;
-  /** 提醒用户：任务栏图标闪烁；system 为真时再发一条系统通知 */
-  attention(title: string, body: string, system: boolean): void;
+  /** 提醒用户：任务栏图标闪烁；system 为真时再发一条系统通知（点通知切到 tabId 那个标签页） */
+  attention(title: string, body: string, system: boolean, tabId?: string): void;
+  /** 只发系统通知，不闪任务栏（设置页的「试一下」） */
+  toast(title: string, body: string): Promise<void>;
+  /** 完成提醒（bridge 交来的）与点通知（要切到哪个标签页）。返回取消订阅函数 */
+  onAgentAlert(cb: (a: AgentAlert) => void): () => void;
+  onToastActivated(cb: (tabId: string) => void): () => void;
   window: {
     minimize(): void;
     toggleMaximize(): void;

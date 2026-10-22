@@ -1,7 +1,7 @@
 // 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键、数据与备份。改动立即生效并自动保存。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bytesToBase64 } from "../../backend/base64";
-import type { Backend, Diagnostics, IntegrationAction, IntegrationStatus, IntegrationTarget, SessionStats } from "../../backend/types";
+import type { Backend, Diagnostics, SessionStats } from "../../backend/types";
 import { SIDEBAR } from "../../layout/layout";
 import {
   DEFAULTS,
@@ -16,9 +16,12 @@ import {
 import { useStore } from "../../state/store";
 import { useUi, type SettingsSection } from "../../state/ui";
 import { BUILTIN_BACKGROUNDS, isBuiltin, renderBuiltin } from "../../theme/backgrounds";
-import { builtinThemes, type Theme } from "../../theme/theme";
+import { importWindowsTerminal } from "../../theme/import";
+import { allThemes, builtinThemes, findTheme, type Theme } from "../../theme/theme";
 import { Icon } from "../Icons";
 import { Group, Row, Segmented, Select, Stepper, TextInput, Toggle } from "./controls";
+import { AboutSection } from "./AboutSection";
+import { AgentSection } from "./AgentSection";
 import { DataSection } from "./DataSection";
 import {
   ACTIONS,
@@ -40,9 +43,10 @@ const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "terminal", label: "终端", icon: "pwsh" },
   { id: "tabs", label: "标签栏", icon: "layout" },
   { id: "shell", label: "Shell 与诊断", icon: "info" },
-  { id: "agent", label: "Agent 用量", icon: "gauge" },
+  { id: "agent", label: "Agent", icon: "gauge" },
   { id: "keys", label: "快捷键", icon: "keyboard" },
   { id: "data", label: "数据与备份", icon: "folder" },
+  { id: "about", label: "关于", icon: "info" },
 ];
 
 type Update = (f: (d: AppSettings) => void) => void;
@@ -110,11 +114,12 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
           <div className="set-body">
           <h3 className="set-section">{SECTIONS.find((x) => x.id === section)?.label}</h3>
           {section === "appearance" && <Appearance s={settings} update={update} backend={backend} systemDark={systemDark} reset={reset} />}
-          {section === "font" && <FontAndZoom s={settings} update={update} reset={reset} />}
+          {section === "font" && <FontAndZoom s={settings} update={update} reset={reset} backend={backend} />}
           {section === "terminal" && <TerminalSection s={settings} update={update} reset={reset} />}
           {section === "tabs" && <TabsSection s={settings} update={update} reset={reset} />}
           {section === "shell" && <ShellSection s={settings} update={update} backend={backend} />}
           {section === "agent" && <AgentSection s={settings} update={update} backend={backend} />}
+          {section === "about" && <AboutSection backend={backend} />}
           {section === "keys" && <KeysSection />}
           {section === "data" && <DataSection backend={backend} />}
           </div>
@@ -155,16 +160,18 @@ function ThemeCard({ t, active, onPick }: { t: Theme; active: boolean; onPick():
 function Appearance({ s, update, backend, systemDark, reset }: { s: AppSettings; update: Update; backend: Backend; systemDark: boolean; reset: Reset }) {
   const current = pickTheme(s.theme, systemDark);
   const follow = typeof s.theme !== "string" && s.theme.follow === "system";
-  const theme = builtinThemes.find((t) => t.name === current) ?? builtinThemes[0];
-  const darkThemes = builtinThemes.filter((t) => t.kind === "dark");
+  const theme = findTheme(current, s.customThemes);
+  const themes = allThemes(s.customThemes);
+  const darkThemes = themes.filter((t) => t.kind === "dark");
   return (
     <>
       <Group title="主题" action={reset((d) => (d.theme = DEFAULTS.theme))}>
         <div className="theme-grid">
-          {builtinThemes.map((t) => (
+          {themes.map((t) => (
             <ThemeCard key={t.name} t={t} active={t.name === current} onPick={() => update((d) => (d.theme = chooseTheme(d.theme, t.name, t.kind)))} />
           ))}
         </div>
+        <ThemeImport s={s} update={update} current={current} />
         <Row label="跟随系统深浅色" desc="Windows 切到深色模式时，自动换成夜间主题">
           <Toggle
             label="跟随系统深浅色"
@@ -190,6 +197,56 @@ function Appearance({ s, update, backend, systemDark, reset }: { s: AppSettings;
       </Group>
       <BackgroundGroup s={s} update={update} backend={backend} theme={theme} reset={reset} />
     </>
+  );
+}
+
+/** 导入 Windows Terminal 配色（选 JSON 文件）、删除导入的配色 */
+function ThemeImport({ s, update, current }: { s: AppSettings; update: Update; current: string }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const onFile = async (f: File | undefined) => {
+    if (!f) return;
+    try {
+      const list = importWindowsTerminal(await f.text());
+      update((d) => {
+        for (const t of list) d.customThemes = [...d.customThemes.filter((c) => c.name !== t.name), t];
+        d.theme = chooseTheme(d.theme, list[0].name, list[0].kind);
+      });
+      setNote(`导入了 ${list.length} 套配色：${list.map((t) => t.displayName).join("、")}`);
+    } catch (e) {
+      setNote(`导入失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const custom = s.customThemes.find((t) => t.name === current);
+  return (
+    <Row
+      label="导入配色"
+      desc={
+        note ??
+        "Windows Terminal 的配色方案（settings.json 里 schemes 的一项，或 windowsterminalthemes.dev 下载的 JSON）。终端 16 色原样使用，界面颜色按它推出来。"
+      }
+    >
+      <span style={{ display: "inline-flex", gap: 8 }}>
+        {custom && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() =>
+              update((d) => {
+                d.customThemes = d.customThemes.filter((t) => t.name !== custom.name);
+                d.theme = DEFAULTS.theme;
+              })
+            }
+          >
+            删除「{custom.displayName}」
+          </button>
+        )}
+        <button type="button" className="btn" onClick={() => input.current?.click()}>
+          选择 JSON 文件
+        </button>
+        <input ref={input} type="file" accept=".json,application/json" hidden onChange={(e) => onFile(e.target.files?.[0]).finally(() => (e.target.value = ""))} />
+      </span>
+    </Row>
   );
 }
 
@@ -345,10 +402,12 @@ const FONT_PRESETS = [
 
 /** 把字体回退链的第一个换成选中的字体，后面的符号、中文、emoji 字体保留 */
 export function withPrimaryFont(family: string, primary: string): string {
-  const rest = family
+  const list = family
     .split(",")
     .map((f) => f.trim())
-    .filter((f) => f && !FONT_PRESETS.some(([p]) => f.replace(/"/g, "") === p));
+    .filter(Boolean);
+  // 第一个是英文主字体（预设里的或用户挑的），换掉它；后面的符号、中文、emoji 字体保留
+  const rest = list.filter((f, i) => i > 0 && !FONT_PRESETS.some(([p]) => f.replace(/"/g, "") === p) && f.replace(/"/g, "") !== primary);
   return [`"${primary}"`, ...rest].join(", ");
 }
 
@@ -358,8 +417,25 @@ const SAMPLE = [
   "       中文字体对齐：浅色优先的终端",
 ];
 
-function FontAndZoom({ s, update, reset }: { s: AppSettings; update: Update; reset: Reset }) {
+/** 这个字体是不是等宽的（装了才能量出来：没装时浏览器换成后备的衬线体，宽窄字母就不一样宽了） */
+function isMonospace(family: string): boolean {
+  const ctx = document.createElement("canvas").getContext("2d");
+  if (!ctx) return false;
+  ctx.font = `40px "${family}", serif`;
+  const narrow = ctx.measureText("iiiiiiiiii").width;
+  const wide = ctx.measureText("WWWWWWWWWW").width;
+  return narrow > 0 && Math.abs(narrow - wide) < 0.5;
+}
+
+function FontAndZoom({ s, update, reset, backend }: { s: AppSettings; update: Update; reset: Reset; backend: Backend }) {
   const primary = s.font.family.split(",")[0]?.replace(/"/g, "").trim();
+  const [monos, setMonos] = useState<string[] | null>(null);
+  useEffect(() => {
+    backend
+      .systemFonts()
+      .then((all) => setMonos(all.filter(isMonospace)))
+      .catch(() => setMonos([]));
+  }, [backend]);
   return (
     <>
       <Group title="缩放" action={reset((d) => ((d.zoom = 1), (d.uiScale = 1), (d.font.size = DEFAULTS.font.size)))}>
@@ -387,6 +463,14 @@ function FontAndZoom({ s, update, reset }: { s: AppSettings; update: Update; res
               </button>
             ))}
           </div>
+        </Row>
+        <Row label="已安装的等宽字体" desc={monos === null ? "正在读取系统字体…" : `这台电脑上找到 ${monos.length} 个等宽字体`}>
+          <Select
+            label="已安装的等宽字体"
+            value={monos?.includes(primary ?? "") ? primary! : ""}
+            options={[{ value: "", label: "选择字体…" }, ...(monos ?? []).map((f) => ({ value: f, label: f }))]}
+            onChange={(f) => f && update((d) => (d.font.family = withPrimaryFont(d.font.family, f)))}
+          />
         </Row>
         <Row label="字体回退链" desc="按顺序找字：英文 → 图标 → 中文 → emoji → 符号。用逗号分隔" wide>
           <TextInput label="字体回退链" mono value={s.font.family} onCommit={(v) => update((d) => (d.font.family = v.trim() || DEFAULTS.font.family))} />
@@ -501,208 +585,6 @@ function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; res
         </Row>
       </Group>
     </>
-  );
-}
-
-// ---- Agent 用量 ----
-
-function AgentSection({ s, update, backend }: { s: AppSettings; update: Update; backend: Backend }) {
-  const [bridgePath, setBridgePath] = useState("");
-  useEffect(() => {
-    backend.agentBridgePath().then(setBridgePath).catch(() => {});
-  }, [backend]);
-  const a = s.agent;
-  return (
-    <>
-      <Group title="用量小窗">
-        <Row
-          label="显示 Agent 用量"
-          desc="跟随当前标签页，显示 Claude Code / Codex 的上下文占用和账号额度（5 小时、周）。只用官方渠道：两者的扩展点（statusLine、hooks、notify）、Codex 自己的 app-server 接口、它们写在本机的会话文件——不读任何登录凭证（docs/07）。"
-        >
-          <Toggle label="Agent 用量" value={a.enabled} onChange={(v) => update((d) => (d.agent.enabled = v))} />
-        </Row>
-        <Row label="小窗位置" desc="浮动卡片可以按住标题拖动，松手吸附到最近的角；也可以放在侧栏底部。">
-          <Segmented
-            label="小窗位置"
-            value={a.widget.style}
-            options={[
-              { value: "floating", label: "浮动卡片" },
-              { value: "sidebar", label: "侧栏底部" },
-              { value: "off", label: "不显示" },
-            ]}
-            onChange={(v) => update((d) => (d.agent.widget.style = v))}
-          />
-        </Row>
-        <Row label="状态栏摘要" desc="状态栏右侧显示一段「5h 38% · 周 21%」，点击可临时收起浮动卡片。">
-          <Toggle label="状态栏摘要" value={a.widget.statusBar} onChange={(v) => update((d) => (d.agent.widget.statusBar = v))} />
-        </Row>
-        <Row label="独立小窗" desc="单独的置顶小窗口，切到别的程序时也能看到额度。命令面板里也能打开。">
-          <button type="button" className="btn" disabled={!a.enabled} onClick={() => backend.agentWindow(true).catch((e) => useUi.getState().showNotice(String(e)))}>
-            打开
-          </button>
-        </Row>
-      </Group>
-      <Group title="数据来源">
-        <Row
-          label="实时额度（Codex）"
-          desc="每两分钟通过本机 Codex 的 app-server（Codex IDE 插件用的官方接口）查一次额度：不用等下一轮对话就是最新的。登录和联网都由 Codex 自己完成，mooncli 不碰凭证。"
-        >
-          <Toggle label="实时额度" value={a.liveQuota} onChange={(v) => update((d) => (d.agent.liveQuota = v))} />
-        </Row>
-        <Row label="codex 位置" desc="留空时自动在 PATH 里找（npm 装的会找到包里自带的 codex.exe）。">
-          <TextInput
-            label="codex 位置"
-            mono
-            value={a.codexPath ?? ""}
-            placeholder="自动"
-            onCommit={(v) => update((d) => (d.agent.codexPath = v.trim() || null))}
-          />
-        </Row>
-        <Row
-          label="接收扩展点数据"
-          desc="接入后（见下方）：Claude Code 的 statusLine 每次刷新都送来上下文与额度，hooks 报告「运行中 / 等你确认 / 本轮已完成」；Codex 的 notify 报告一轮结束。"
-        >
-          <Toggle label="接收扩展点数据" value={a.receiveExtensions} onChange={(v) => update((d) => (d.agent.receiveExtensions = v))} />
-        </Row>
-        <Row label="读取会话文件" desc="Codex 的 rollout 文件带额度快照（与官方 /status 同源）；Claude Code 的转录能补上下文占用。只读，不改。">
-          <Toggle label="读取会话文件" value={a.readSessionFiles} onChange={(v) => update((d) => (d.agent.readSessionFiles = v))} />
-        </Row>
-      </Group>
-      <Group title="小窗外观">
-        <Row label="停靠角落">
-          <Segmented
-            label="小窗停靠角落"
-            value={a.widget.anchor}
-            options={[
-              { value: "bottom-right", label: "右下" },
-              { value: "bottom-left", label: "左下" },
-              { value: "top-right", label: "右上" },
-              { value: "top-left", label: "左上" },
-            ]}
-            onChange={(v) => update((d) => (d.agent.widget.anchor = v))}
-          />
-        </Row>
-        <Row label="不透明度">
-          <Stepper label="小窗不透明度" value={Math.round(a.widget.opacity * 100)} min={50} max={100} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.opacity = v / 100))} />
-        </Row>
-        <Row label="警告阈值" desc="用量达到这个比例时进度条变警告色">
-          <Stepper label="警告阈值" value={Math.round(a.widget.warnAt * 100)} min={50} max={90} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.warnAt = v / 100))} />
-        </Row>
-        <Row label="危险阈值" desc="用量达到这个比例时进度条变危险色、数字加粗">
-          <Stepper label="危险阈值" value={Math.round(a.widget.dangerAt * 100)} min={80} max={99} step={1} unit="%" onChange={(v) => update((d) => (d.agent.widget.dangerAt = v / 100))} />
-        </Row>
-      </Group>
-      <IntegrationGroup backend={backend} bridgePath={bridgePath} />
-    </>
-  );
-}
-
-const TARGET_LABEL: Record<IntegrationTarget, string> = { claude: "Claude Code", codex: "Codex" };
-
-function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePath: string }) {
-  const [status, setStatus] = useState<IntegrationStatus | null>(null);
-  const [pending, setPending] = useState<{ target: IntegrationTarget; action: IntegrationAction; changes: string[] } | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const refresh = () => {
-    backend.agentIntegrationStatus().then(setStatus).catch(() => {});
-  };
-  useEffect(refresh, [backend]);
-
-  const preview = (target: IntegrationTarget, action: IntegrationAction) => {
-    setNote(null);
-    backend
-      .agentIntegrationPreview(target, action)
-      .then((o) => setPending({ target, action, changes: o.changes }))
-      .catch((e) => setNote(`预览失败：${String(e)}`));
-  };
-  const apply = () => {
-    if (!pending) return;
-    setBusy(true);
-    backend
-      .agentIntegrationApply(pending.target, pending.action)
-      .then((o) => {
-        setNote(`${TARGET_LABEL[pending.target]}：已写入（原文件已自动备份）。${o.changes.join("；")}`);
-        setPending(null);
-        refresh();
-      })
-      .catch((e) => setNote(`写入失败：${String(e)}`))
-      .finally(() => setBusy(false));
-  };
-
-  const row = (target: IntegrationTarget, what: React.ReactNode, path: string | undefined) => {
-    const on = status?.[target];
-    return (
-      <Row
-        label={TARGET_LABEL[target]}
-        desc={
-          <>
-            {what}
-            <br />
-            配置文件：<code>{path ?? "读取中"}</code> · 状态：{on === undefined ? "读取中" : on ? "已接入" : "未接入"}
-          </>
-        }
-      >
-        <button type="button" className="btn" disabled={on === undefined || busy || (!on && status?.bridgeExists === false)} onClick={() => preview(target, on ? "unintegrate" : "integrate")}>
-          {on ? "断开" : "接入"}
-        </button>
-      </Row>
-    );
-  };
-
-  return (
-    <Group title="接入（数据更实时、更全）">
-      <Row
-        label="说明"
-        desc={
-          <>
-            不接入也能用（读会话文件，Codex 还有实时额度）。接入是把官方扩展点指向 mooncli-bridge
-            {bridgePath ? (
-              <>
-                （<code>{bridgePath}</code>）
-              </>
-            ) : null}
-            ：你原来的 statusLine、notify 会被保存并由 bridge 原样转调，hooks 只追加不覆盖；写入前先给你看变更清单、自动备份原文件，断开时精确恢复。
-            {status?.bridgeExists === false && <strong>（没找到 mooncli-bridge，开发版请先运行 node scripts/build-bridge.mjs）</strong>}
-          </>
-        }
-      >
-        <span />
-      </Row>
-      {row(
-        "claude",
-        <>statusLine 送来上下文占用和 5 小时 / 周额度（Pro / Max 订阅），hooks 报告「运行中 / 等你确认 / 本轮已完成」。没有原状态栏时，bridge 会显示一行「模型 · 上下文 · 额度」。</>,
-        status?.claudeSettingsPath,
-      )}
-      {row("codex", <>notify：一轮结束时把该会话标为「本轮已完成」并关联到标签页。额度来自实时查询和会话文件，不依赖接入。</>, status?.codexConfigPath)}
-      {pending && (
-        <Row
-          label={`${pending.action === "integrate" ? "确认接入" : "确认断开"} ${TARGET_LABEL[pending.target]}`}
-          desc={
-            <ul style={{ margin: 0, paddingLeft: 16 }}>
-              {pending.changes.map((ch) => (
-                <li key={ch}>{ch}</li>
-              ))}
-            </ul>
-          }
-        >
-          <span style={{ display: "inline-flex", gap: 8 }}>
-            <button type="button" className="btn primary" disabled={busy} onClick={apply}>
-              确认写入
-            </button>
-            <button type="button" className="btn" disabled={busy} onClick={() => setPending(null)}>
-              取消
-            </button>
-          </span>
-        </Row>
-      )}
-      {note && (
-        <Row label="结果" desc={note}>
-          <span />
-        </Row>
-      )}
-    </Group>
   );
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "mooncli-agent"
-description = "Agent 用量数据：只读 Claude Code / Codex 官方扩展点（statusLine、hooks、notify）、官方客户端接口（codex app-server）与它们写在本机的会话文件，解析出上下文占用与额度窗口"
+description = "Agent 用量与完成提醒：只读 Claude Code / Codex 官方扩展点（statusLine、hooks、notify）、官方客户端接口（codex app-server）与它们写在本机的会话文件，解析出额度窗口与当前会话的上下文占用"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,15 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true

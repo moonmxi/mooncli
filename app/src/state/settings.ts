@@ -2,6 +2,7 @@
 // 界面持有完整设置；Rust 端保存到 settings.json，并只读取自己用得到的字段（shell、history）。
 import { create } from "zustand";
 import { cleanKeymap, type Keymap } from "../shortcuts";
+import type { Theme } from "../theme/theme";
 
 // 终端字体回退链，按顺序找字：英文等宽 → Nerd Font 图标 → 中文 → 彩色 emoji → 符号 → 系统等宽字体。
 // Noto Color Emoji 连 ASCII 的数字和 * # 都带，所以放在系统等宽字体之后，免得普通字符被它抢走。
@@ -18,7 +19,7 @@ export interface AppSettings {
   zoom: number;
   /** 只缩放标题栏、侧栏、状态栏、面板 */
   uiScale: number;
-  font: { family: string; size: number; lineHeight: number; weight: string; weightBold: string; ligatures: boolean };
+  font: { family: string; size: number; lineHeight: number; weight: string; weightBold: string };
   background: {
     /** null：不用背景图；"builtin:xxx"：内置；其它：用户导入的文件名 */
     image: string | null;
@@ -52,19 +53,19 @@ export interface AppSettings {
   history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean; keepDays: number };
   /** 除了内置的 ssh、mosh、wsl……之外，也当作"连接服务器"的命令（写法和 ssh 一样，比如自己的别名） */
   remote: { connectCommands: string[] };
-  /** Agent 用量小窗（docs/07，Claude Code 与 Codex）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
+  /** Agent（docs/07，Claude Code 与 Codex）：额度卡片默认关闭；widget 部分只界面用，其余 Rust 也读 */
   agent: {
+    /** 额度卡片 */
     enabled: boolean;
-    readSessionFiles: boolean;
-    /** 接收官方扩展点的数据：Claude Code 的 statusLine / hooks、Codex 的 notify */
-    receiveExtensions: boolean;
     /** 通过本机 Codex 的 app-server 实时查询额度 */
     liveQuota: boolean;
     /** codex 可执行文件的位置；null 时自动在 PATH 里找 */
     codexPath: string | null;
+    /** 完成提醒：一轮结束、要你确认时弹系统通知（要先接入 hooks / notify） */
+    notify: { enabled: boolean; quietWhenFocused: boolean };
     widget: {
-      /** 小窗放哪：浮动卡片 / 侧栏底部 / 不显示卡片（只留状态栏一段） */
-      style: "floating" | "sidebar" | "off";
+      /** 浮动卡片 / 不显示卡片（只留状态栏一段） */
+      style: "floating" | "off";
       /** 状态栏里显示一段额度摘要 */
       statusBar: boolean;
       anchor: "bottom-right" | "bottom-left" | "top-right" | "top-left";
@@ -78,6 +79,8 @@ export interface AppSettings {
   notifications: { taskbar: boolean; system: boolean };
   /** 补全面板（docs/04 §4）：钉住后是否也在停顿时向 pwsh 要补全（悄悄发按键，默认关） */
   completion: { pinnedRequestsPwsh: boolean };
+  /** 导入的配色（theme/import.ts），和内置主题一起出现在主题列表里 */
+  customThemes: Theme[];
   /** 改过的快捷键（shortcuts.ts 的 Keymap） */
   keys: Keymap;
 }
@@ -89,7 +92,7 @@ export const DEFAULTS: AppSettings = {
   theme: { light: "moon-paper", dark: "night-voyage", follow: "off" },
   zoom: 1,
   uiScale: 1,
-  font: { family: DEFAULT_FONT_FAMILY, size: 14, lineHeight: 1.2, weight: "normal", weightBold: "bold", ligatures: true },
+  font: { family: DEFAULT_FONT_FAMILY, size: 14, lineHeight: 1.2, weight: "normal", weightBold: "bold" },
   background: {
     image: null,
     fit: "cover",
@@ -121,14 +124,14 @@ export const DEFAULTS: AppSettings = {
   remote: { connectCommands: [] },
   agent: {
     enabled: false,
-    readSessionFiles: true,
-    receiveExtensions: true,
     liveQuota: true,
     codexPath: null,
+    notify: { enabled: true, quietWhenFocused: true },
     widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
   },
   notifications: { taskbar: true, system: true },
   completion: { pinnedRequestsPwsh: false },
+  customThemes: [],
   keys: {},
 };
 
@@ -173,7 +176,13 @@ export function mergeSettings(saved: unknown, defaults: AppSettings = DEFAULTS):
   if (savedVersion < 2 && m.terminal.minimumContrastRatio === 4.5) m.terminal.minimumContrastRatio = defaults.terminal.minimumContrastRatio;
   // 快捷键是"操作 → 按键列表"的表，默认值是空表，上面的通用合并会把它丢掉，单独处理
   m.keys = cleanKeymap(isPlain(saved) ? saved.keys : undefined);
+  m.customThemes = m.customThemes.filter(
+    (t): t is Theme =>
+      isPlain(t) && typeof t.name === "string" && t.name.startsWith("custom-") && isPlain(t.terminal) && isPlain(t.ui) && (t.kind === "light" || t.kind === "dark"),
+  );
   m.remote.connectCommands = m.remote.connectCommands.filter((c) => typeof c === "string" && /^[\w.-]{1,40}$/.test(c));
+  // 侧栏形态的额度卡片去掉了，换成浮动卡片
+  if ((m.agent.widget.style as string) === "sidebar") m.agent.widget.style = "floating";
   m.version = SETTINGS_VERSION;
   m.zoom = clamp(m.zoom, LIMITS.zoom.min, LIMITS.zoom.max);
   m.uiScale = clamp(m.uiScale, LIMITS.uiScale.min, LIMITS.uiScale.max);

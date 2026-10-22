@@ -1,4 +1,4 @@
-//! Agent 用量数据层（Claude Code 与 Codex）。设计见 docs/07-agent-monitor.md。
+//! Agent 用量与完成提醒（Claude Code 与 Codex）。设计见 docs/07-agent-monitor.md。
 //!
 //! 只用三类数据（合规边界，docs/07 第 1 节）：
 //! 1. 官方扩展点送来的数据——Claude Code 的 statusLine / hooks、Codex 的 notify，
@@ -15,30 +15,14 @@ pub mod codex_live;
 pub mod integrate;
 mod jsonl;
 pub mod model;
+pub mod notify;
 pub mod spool;
 mod timeutil;
 
-pub use model::{
-    AccountUsage, AgentKind, ContextUsage, RateWindow, SessionState, SessionUsage, SnapshotSource, UsageReport,
-};
+pub use model::{AccountUsage, AgentKind, ContextUsage, CurrentSession, RateWindow, SnapshotSource, UsageReport};
 pub use timeutil::now_epoch;
 
 use std::path::PathBuf;
-
-/// 数据来源开关，对应设置里的子开关（docs/07 第 6 节）。
-#[derive(Debug, Clone, Copy)]
-pub struct Sources {
-    /// 读取会话文件（Codex rollout、Claude Code 转录）
-    pub files: bool,
-    /// 接收扩展点送来的数据（spool：statusLine、hooks、notify）
-    pub extensions: bool,
-}
-
-impl Default for Sources {
-    fn default() -> Self {
-        Self { files: true, extensions: true }
-    }
-}
 
 /// 一次采集要看的目录。主进程按自己的数据目录约定填好，测试里用临时目录。
 #[derive(Debug, Clone)]
@@ -49,45 +33,44 @@ pub struct CollectOptions {
     pub claude_dir: PathBuf,
     /// mooncli 的 agent 数据目录（bridge 的 spool 在其下）
     pub agent_dir: PathBuf,
-    pub sources: Sources,
 }
 
 impl CollectOptions {
     pub fn defaults(agent_dir: PathBuf) -> Self {
-        Self {
-            codex_homes: codex::codex_homes(),
-            claude_dir: claude::claude_config_dir(),
-            agent_dir,
-            sources: Sources::default(),
-        }
+        Self { codex_homes: codex::codex_homes(), claude_dir: claude::claude_config_dir(), agent_dir }
     }
 }
 
-/// 采集全部用量数据。任何一处读不到都只会让对应部分为空，不报错——小窗宁可显示「不可用」。
-/// `live` 是主进程缓存的实时额度（codex app-server 查到的），比会话文件里的快照新时替换它。
-pub fn collect_all(opts: &CollectOptions, live: &[AccountUsage]) -> UsageReport {
-    let mut report = UsageReport::default();
-    let spool = opts.sources.extensions.then_some(opts.agent_dir.as_path());
+/// 当前标签页正在运行的 Agent：只为它找上下文占用，其它会话一概不看。
+#[derive(Debug, Clone)]
+pub struct Focus {
+    pub kind: AgentKind,
+    /// mooncli 标签页会话 ID（bridge 从 MOONCLI_SESSION_ID 记下，用来认出这个标签页的会话）
+    pub tab_id: String,
+    /// 标签页当前目录：没接入扩展点时按目录找会话文件
+    pub cwd: Option<String>,
+    /// Agent 开始运行的时刻（epoch 秒）：更早的会话记录不算
+    pub since: i64,
+}
 
-    let (sessions, account) = claude::collect(&opts.claude_dir, spool, opts.sources.files);
-    report.sessions.extend(sessions);
-    report.accounts.extend(account);
-
-    if opts.sources.files {
-        let (sessions, account) = codex::collect(&opts.codex_homes, spool);
-        report.sessions.extend(sessions);
-        report.accounts.extend(account);
+/// 采集额度与当前会话。任何一处读不到都只会让对应部分为空，不报错。
+/// `live` 是主进程缓存的实时额度（codex app-server 查到的），比文件里的快照新时替换它。
+pub fn collect(opts: &CollectOptions, live: &[AccountUsage], focus: Option<&Focus>) -> UsageReport {
+    let mut accounts = Vec::new();
+    accounts.extend(claude::latest_account(&opts.agent_dir));
+    let codex_live = live.iter().find(|a| a.kind == AgentKind::Codex);
+    // 实时额度在手就不必翻会话文件
+    let codex_file = if codex_live.is_some() { None } else { codex::latest_account(&opts.codex_homes) };
+    match (codex_live, codex_file) {
+        (Some(l), _) => accounts.push(l.clone()),
+        (None, Some(f)) => accounts.push(f),
+        (None, None) => {}
     }
-
-    for l in live {
-        match report.accounts.iter_mut().find(|a| a.kind == l.kind) {
-            Some(a) if a.updated_at >= l.updated_at => {}
-            Some(a) => *a = l.clone(),
-            None => report.accounts.push(l.clone()),
-        }
-    }
-    report.sessions.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-    report
+    let current = focus.map(|f| match f.kind {
+        AgentKind::Claude => claude::current(&opts.claude_dir, &opts.agent_dir, f),
+        AgentKind::Codex => codex::current(&opts.codex_homes, &opts.agent_dir, f),
+    });
+    UsageReport { accounts, current }
 }
 
 #[cfg(test)]
@@ -95,28 +78,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_snapshot_wins_only_when_newer() {
+    fn live_codex_quota_is_used_and_current_follows_focus() {
         let dir = tempfile::tempdir().unwrap();
         let opts = CollectOptions {
             codex_homes: vec![dir.path().join("codex")],
             claude_dir: dir.path().join("claude"),
             agent_dir: dir.path().join("agent"),
-            sources: Sources::default(),
         };
-        let live = AccountUsage {
-            kind: AgentKind::Codex,
-            primary: Some(RateWindow {
-                used_percent: 5.0,
-                window_minutes: Some(300),
-                resets_at: None,
-                estimated: false,
-            }),
-            secondary: None,
-            plan: Some("plus".into()),
-            updated_at: 50,
-            source: SnapshotSource::Live,
-        };
-        let r = collect_all(&opts, std::slice::from_ref(&live));
-        assert_eq!(r.accounts, vec![live]);
+        let live = AccountUsage::from_windows(
+            AgentKind::Codex,
+            Some(RateWindow { used_percent: 5.0, window_minutes: Some(300), resets_at: None }),
+            None,
+            Some("plus".into()),
+            50,
+            SnapshotSource::Live,
+        )
+        .unwrap();
+        let r = collect(&opts, std::slice::from_ref(&live), None);
+        assert_eq!(r.accounts, vec![live.clone()]);
+        assert!(r.current.is_none());
+        let focus = Focus { kind: AgentKind::Codex, tab_id: "t".into(), cwd: None, since: 0 };
+        let r = collect(&opts, &[live], Some(&focus));
+        let cur = r.current.unwrap();
+        assert_eq!(cur.kind, AgentKind::Codex);
+        assert!(cur.context.is_none());
     }
 }

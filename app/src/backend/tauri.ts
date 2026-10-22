@@ -2,8 +2,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type {
+  AgentAlert,
   Backend,
   CreateOptions,
   DataOverview,
@@ -19,6 +19,13 @@ import type {
   ShellStatus,
   UsageReport,
 } from "./types";
+
+/** 本地时间，用在导出文件名里：20261022-1530 */
+function localStamp(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
 
 const log = (what: string) => (e: unknown) => console.error(`mooncli: ${what}失败`, e);
 
@@ -37,22 +44,22 @@ export function tauriBackend(): Backend {
     diagnostics: () => invoke<Diagnostics>("diagnostics"),
     shellStatus: () => invoke<ShellStatus>("shell_status"),
     openUrl: (url) => invoke("open_url", { url }),
+    systemFonts: () => invoke<string[]>("system_fonts"),
+    logError(message) {
+      invoke("log_error", { message }).catch(() => {});
+    },
+    logsPack: () => invoke<string>("logs_pack", { label: localStamp() }),
     dataOverview: () => invoke<DataOverview>("data_overview"),
     dataBackupNow: () => invoke<string | null>("data_backup_now"),
     dataRestoreBackup: (name) => invoke("data_restore_backup", { name }),
     settingsReset: () => invoke("settings_reset"),
-    dataExport: (includeHistory) => {
-      // 文件名里用本地时间：mooncli-backup-20261022-1530.zip
-      const d = new Date();
-      const p = (n: number) => String(n).padStart(2, "0");
-      const label = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
-      return invoke<string>("data_export", { includeHistory, label });
-    },
+    // 文件名里用本地时间：mooncli-backup-20261022-1530.zip
+    dataExport: (includeHistory) => invoke<string>("data_export", { includeHistory, label: localStamp() }),
     dataImport: (dataBase64, includeHistory) => invoke<ImportSummary>("data_import", { dataBase64, includeHistory }),
     dataReveal: (target) => invoke("data_reveal", { target }),
     historyPrune: (days) => invoke<number>("history_prune", { days }),
     sessionStats: (id) => invoke<SessionStats>("session_stats", { id }),
-    agentUsage: () => invoke<UsageReport>("agent_usage"),
+    agentUsage: (focus) => invoke<UsageReport>("agent_usage", { focus: focus ?? null }),
     agentBridgePath: () => invoke<string>("agent_bridge_path"),
     agentIntegrationStatus: () => invoke<IntegrationStatus>("agent_integration_status"),
     agentRefreshLive: () => invoke("agent_refresh_live"),
@@ -96,14 +103,18 @@ export function tauriBackend(): Backend {
       const offs = [listen("settings-changed", (e) => cb({ value: e.payload })), listen<string>("settings-error", (e) => cb({ error: e.payload }))];
       return () => offs.forEach((p) => p.then((off) => off()));
     },
-    attention(title, body, system) {
+    attention(title, body, system, tabId) {
       win.requestUserAttention(UserAttentionType.Informational).catch(log("任务栏提醒"));
-      if (!system) return;
-      (async () => {
-        let ok = await isPermissionGranted();
-        if (!ok) ok = (await requestPermission()) === "granted";
-        if (ok) sendNotification({ title, body });
-      })().catch(log("发送系统通知"));
+      if (system) invoke("notify_toast", { title, body, tabId: tabId ?? null }).catch(log("发送系统通知"));
+    },
+    toast: (title, body) => invoke("notify_toast", { title, body, tabId: null }),
+    onAgentAlert(cb) {
+      const off = listen<AgentAlert>("agent-alert", (e) => cb(e.payload));
+      return () => void off.then((f) => f());
+    },
+    onToastActivated(cb) {
+      const off = listen<string>("toast-activated", (e) => cb(e.payload));
+      return () => void off.then((f) => f());
     },
     window: {
       minimize: () => void win.minimize(),

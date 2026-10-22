@@ -3,9 +3,11 @@
 //! - `mooncli-bridge claude-statusline`：作 Claude Code 的 statusLine 命令。读 stdin 的 JSON，
 //!   写进 spool 给主进程；用户原来的状态栏命令若被接入流程保存过，原样转调并转发它的输出，
 //!   没有就输出自带的一行（模型 · 上下文 · 额度）。
-//! - `mooncli-bridge claude-hook`：作 hooks 命令。读 stdin 的事件 JSON，写进 spool，立刻退出。
+//! - `mooncli-bridge claude-hook`：作 hooks 命令。读 stdin 的事件 JSON，写进 spool；
+//!   一轮结束（Stop）、要你确认（Notification）时发完成提醒（见 mooncli_agent::notify）。
 //! - `mooncli-bridge codex-notify`：作 Codex 的 notify。最后一个 argv 是事件 JSON
-//!   （目前只有 agent-turn-complete），写进 spool；用户原来的 notify 若保存过，同样转调（不等待）。
+//!   （目前只有 agent-turn-complete），写进 spool 并发完成提醒；用户原来的 notify 若保存过，同样转调（不等待）。
+//! - `mooncli-bridge test-toast`：弹一条测试通知（设置页的「试一下」用不到它，留给命令行排查）。
 //!
 //! 铁律：永远以 0 退出、不往 stdout 输出多余内容（statusline 的那一行除外）、
 //! 任何错误都吞掉——绝不能因为 mooncli 的问题影响 Claude Code / Codex 本身。
@@ -14,6 +16,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use mooncli_agent::notify::{self, Alert};
 use mooncli_agent::spool::{
     SpoolEntry, claude_hook_file_name, claude_status_file_name, codex_notify_file_name, write_entry,
 };
@@ -158,9 +161,50 @@ fn claude_hook() {
     let raw = read_stdin();
     let Ok(payload) = serde_json::from_slice::<Value>(&raw) else { return };
     let Some(id) = payload.get("session_id").and_then(Value::as_str).map(str::to_string) else { return };
+    let dir = agent_dir();
     let slim: serde_json::Map<String, Value> =
         HOOK_FIELDS.iter().filter_map(|k| payload.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
-    spool(&agent_dir(), &claude_hook_file_name(&id), Value::Object(slim));
+    spool(&dir, &claude_hook_file_name(&id), Value::Object(slim));
+    let transcript = payload.get("transcript_path").and_then(Value::as_str).map(PathBuf::from);
+    let last_text = || transcript.and_then(|t| mooncli_agent::claude::transcript_tail(&t).last_text);
+    if let Some(alert) = notify::from_claude_hook(&payload, last_text, mooncli_agent::now_epoch()) {
+        deliver(&dir, alert);
+    }
+}
+
+/// 发一条提醒：在 mooncli 的标签页里就交给主程序（它知道你是不是正看着那个标签页），
+/// 否则自己弹系统通知；设置里关了提醒就什么都不做。
+fn deliver(dir: &Path, mut alert: Alert) {
+    let prefs = bridge_config(dir).get("notify").cloned().unwrap_or(Value::Null);
+    if prefs.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return;
+    }
+    let ancestors = notify::ancestors();
+    let in_mooncli = tab_session_id().is_some() && ancestors.iter().any(|(_, name)| name == "mooncli.exe");
+    if in_mooncli {
+        alert.tab_session_id = tab_session_id();
+        let _ = notify::write_alert(dir, &alert);
+        return;
+    }
+    let quiet = prefs.get("quietWhenFocused").and_then(Value::as_bool) != Some(false);
+    if quiet && notify::foreground_is_ancestor(&ancestors) {
+        return;
+    }
+    toast(dir, &alert.title, &alert.body);
+}
+
+/// 自己弹通知。先确认通知身份登记过：没登记的话 Windows 会悄悄丢掉通知，
+/// 而 mooncli 主程序不一定启动过（图标由主程序放进 agent 目录，没有就不带图标）。
+fn toast(dir: &Path, title: &str, body: &str) -> bool {
+    let icon = dir.join("mooncli.png");
+    let _ = notify::register_app_id(icon.is_file().then_some(icon.as_path()));
+    match notify::show_toast(title, body, None) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("{e}");
+            false
+        }
+    }
 }
 
 fn codex_notify(args: &[String]) {
@@ -169,7 +213,15 @@ fn codex_notify(args: &[String]) {
     let Ok(payload) = serde_json::from_str::<Value>(json_text) else { return };
     let dir = agent_dir();
     if let Some(thread_id) = payload.get("thread-id").and_then(Value::as_str) {
-        spool(&dir, &codex_notify_file_name(thread_id), payload.clone());
+        // 只留关联会话要用的字段，用户的提问和 Agent 的回复不落进 mooncli 的目录
+        let slim: serde_json::Map<String, Value> = ["type", "thread-id", "turn-id", "cwd"]
+            .iter()
+            .filter_map(|k| payload.get(*k).map(|v| (k.to_string(), v.clone())))
+            .collect();
+        spool(&dir, &codex_notify_file_name(thread_id), Value::Object(slim));
+    }
+    if let Some(alert) = notify::from_codex(&payload, mooncli_agent::now_epoch()) {
+        deliver(&dir, alert);
     }
     // 转调用户原来的 notify（不等待，和 Codex 自己对 notify 子进程的态度一致）
     if let Some(prev) = bridge_config(&dir).get("previousCodexNotify").and_then(Value::as_array) {
@@ -192,6 +244,9 @@ fn main() {
         Some("claude-statusline") => claude_statusline(),
         Some("claude-hook") => claude_hook(),
         Some("codex-notify") => codex_notify(&args[1..]),
+        Some("test-toast") => {
+            toast(&agent_dir(), "mooncli", "通知可以正常显示");
+        }
         _ => {}
     }
     // 永远 0 退出

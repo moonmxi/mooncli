@@ -291,26 +291,38 @@ pub struct Remote {
     pub connect_commands: Vec<String>,
 }
 
-/// Agent 用量小窗（docs/07，Claude Code 与 Codex）。整个功能默认关闭；来源开关对应 docs/07 第 6 节。
-/// 小窗的摆放、样式等只在界面侧用得到的字段不进这个结构（设置以 JSON 原样保存，不会丢）。
+/// Agent（docs/07，Claude Code 与 Codex）：额度卡片默认关闭，完成提醒在接入后默认开启。
+/// 卡片的摆放、样式等只在界面侧用得到的字段不进这个结构（设置以 JSON 原样保存，不会丢）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Agent {
-    /// 总开关。关时不采集、不注入 MOONCLI_AGENT_DIR，也不显示小窗
+    /// 额度卡片的总开关。关时不采集、不显示卡片
     pub enabled: bool,
-    /// 读取会话文件（Codex rollout、Claude Code 转录）
-    pub read_session_files: bool,
-    /// 接收官方扩展点送来的数据（Claude Code 的 statusLine / hooks、Codex 的 notify）
-    pub receive_extensions: bool,
     /// 通过本机 Codex 的 app-server 实时查询额度（登录、联网都由 Codex 自己完成）
     pub live_quota: bool,
     /// codex 可执行文件的位置；不填时自动在 PATH 里找
     pub codex_path: Option<String>,
+    pub notify: AgentNotify,
 }
 
 impl Default for Agent {
     fn default() -> Self {
-        Self { enabled: false, read_session_files: true, receive_extensions: true, live_quota: true, codex_path: None }
+        Self { enabled: false, live_quota: true, codex_path: None, notify: AgentNotify::default() }
+    }
+}
+
+/// 完成提醒（Claude Code / Codex 一轮结束、要你确认时弹系统通知）。要先在设置里接入 hooks / notify。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentNotify {
+    pub enabled: bool,
+    /// 你正看着那个标签页（或运行 Agent 的终端窗口）时不弹
+    pub quiet_when_focused: bool,
+}
+
+impl Default for AgentNotify {
+    fn default() -> Self {
+        Self { enabled: true, quiet_when_focused: true }
     }
 }
 

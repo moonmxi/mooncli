@@ -18,16 +18,41 @@ interface Props {
   now: number;
   actions: TabActions;
   onCycleTheme(): void;
-  /** 标签列表下方、底部按钮上方的区块（Agent 用量的侧栏形态） */
-  footer?: React.ReactNode;
 }
 
-export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, actions, onCycleTheme, footer }: Props) {
+export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, actions, onCycleTheme }: Props) {
   const tabs = useStore((s) => s.tabs);
   const activeId = useStore((s) => s.activeId);
   const activate = useStore((s) => s.activate);
   const openSettings = useUi((s) => s.openSettings);
   const [drag, setDrag] = useState<{ width: number } | null>(null);
+  /** 正在拖的标签页和停在了哪个标签页上 */
+  const [moving, setMoving] = useState<{ id: string; over?: string } | null>(null);
+
+  // 拖动排序：按住标签页移动超过几像素才算拖动（不影响点击）；松手时放到所停的标签页的位置。
+  // 用指针事件自己做，不用 HTML5 拖放——Tauri 在 Windows 上会截走原生拖放事件。
+  const startMove = (e: React.PointerEvent, id: string) => {
+    if (e.button !== 0 || useStore.getState().editingId) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let started = false;
+    let over: string | undefined;
+    const move = (ev: PointerEvent) => {
+      if (!started && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+      started = true;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-tab-id]");
+      over = el?.dataset.tabId;
+      setMoving({ id, over });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (started && over && over !== id) useStore.getState().moveTab(id, over);
+      setMoving(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const shownDensity = drag ? dragPreview(drag.width) : density;
   const shownWidth = drag ? drag.width : width;
   const pinnedCount = tabs.filter((t) => t.pinned).length;
@@ -52,12 +77,16 @@ export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, action
       </button>
       <div className="tabs-scroll" role="tablist" aria-orientation="vertical">
         {orderedTabs(tabs).map((t, i) => (
-          <div key={t.id} className={i === pinnedCount - 1 && pinnedCount < tabs.length ? "pin-divider" : undefined}>
+          <div
+            key={t.id}
+            data-tab-id={t.id}
+            className={`${i === pinnedCount - 1 && pinnedCount < orderedTabs(tabs).length ? "pin-divider" : ""}${moving?.over === t.id && moving.id !== t.id ? " drop-target" : ""}`}
+            onPointerDown={(e) => startMove(e, t.id)}
+          >
             <TabItem tab={listView(tabs, t)} active={t.id === activeId} density={shownDensity} now={now} onClick={() => activate(t.id)} actions={actions} />
           </div>
         ))}
       </div>
-      {footer && shownDensity !== "collapsed" && footer}
       <div className="side-foot">
         <button type="button" className="foot-btn" onClick={() => openSettings()} title="设置 (Ctrl+,)">
           <Icon name="gear" />

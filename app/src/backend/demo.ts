@@ -422,48 +422,38 @@ export function demoBackend(): Backend {
     },
     sessionStats: async () => ({ outputBytes: 1024, trustedMarks: 4, untrustedMarks: 0, privateMessages: 1, ageMs: 1000 }),
     // 演示数据：和 docs/07 第 5 节的卡片示意一致，时间按打开页面的时刻现算
-    agentUsage: async () => {
+    agentUsage: async (focus) => {
       const now = Math.floor(Date.now() / 1000);
       return {
-        sessions: [
-          {
-            kind: "claude",
-            sessionId: "demo-claude-1",
-            cwd: "C:\\Users\\moon\\code\\mooncli",
-            model: "Opus",
-            context: { usedTokens: 126_000, windowTokens: 1_000_000 },
-            state: "waiting",
-            updatedAt: now - 20,
-            source: "statusLine",
-          },
-          {
-            kind: "codex",
-            sessionId: "demo-codex-1",
-            cwd: "C:\\Users\\moon\\code\\other-project",
-            model: "gpt-5-codex",
-            context: { usedTokens: 171_500, windowTokens: 475_000 },
-            state: "done",
-            updatedAt: now - 900,
-            source: "sessionFile",
-          },
-        ],
         accounts: [
           {
             kind: "claude",
-            primary: { usedPercent: 38, windowMinutes: 300, resetsAt: now + 2 * 3600 + 18 * 60, estimated: false },
-            secondary: { usedPercent: 21, windowMinutes: 10080, resetsAt: now + 4 * 86400, estimated: false },
+            fiveHour: { usedPercent: 46, windowMinutes: 300, resetsAt: now + 2 * 3600 + 18 * 60 },
+            sevenDay: { usedPercent: 6, windowMinutes: 10080, resetsAt: now + 4 * 86400 },
             updatedAt: now - 20,
             source: "statusLine",
           },
           {
             kind: "codex",
-            primary: { usedPercent: 27, windowMinutes: 300, resetsAt: now + 3600 + 42 * 60, estimated: false },
-            secondary: { usedPercent: 9, windowMinutes: 10080, resetsAt: now + 5 * 86400, estimated: false },
+            fiveHour: { usedPercent: 27, windowMinutes: 300, resetsAt: now + 3600 + 42 * 60 },
+            sevenDay: { usedPercent: 9, windowMinutes: 10080, resetsAt: now + 5 * 86400 },
             plan: "plus",
             updatedAt: now - 60,
             source: "live",
           },
         ],
+        current: focus
+          ? {
+              kind: focus.kind,
+              model: focus.kind === "claude" ? "Opus" : "gpt-5-codex",
+              context:
+                focus.kind === "claude"
+                  ? { usedTokens: 126_000, windowTokens: 1_000_000, usedPercent: 12.6 }
+                  : { usedTokens: 71_500, windowTokens: 272_000, usedPercent: 22.9 },
+              updatedAt: now - 5,
+            }
+          : null,
+        claudeIntegrated: true,
       } satisfies UsageReport;
     },
     agentRefreshLive: async () => {},
@@ -573,6 +563,12 @@ export function demoBackend(): Backend {
     },
     onSettingsFile: () => () => {},
     attention: () => {},
+    toast: async () => {},
+    onAgentAlert: () => () => {},
+    onToastActivated: () => () => {},
+    logError: (m) => console.error(m),
+    logsPack: async () => "C:\\Users\\moon\\Downloads\\mooncli-logs-demo.zip",
+    systemFonts: async () => ["Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", "Segoe UI", "Microsoft YaHei UI", "Arial"],
     window: { minimize() {}, toggleMaximize() {}, close() {} },
   };
 }

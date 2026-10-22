@@ -23,6 +23,16 @@ export const builtinThemes: Theme[] = BUILTIN_ORDER.map((name) => {
   return t;
 });
 
+/** 内置主题 + 用户导入的主题（settings.customThemes） */
+export function allThemes(custom: Theme[] = []): Theme[] {
+  return [...builtinThemes, ...custom.filter((c) => !builtinThemes.some((b) => b.name === c.name))];
+}
+
+/** 按名字找主题，找不到（比如导入的主题被删了）用第一个内置主题 */
+export function findTheme(name: string, custom: Theme[] = []): Theme {
+  return allThemes(custom).find((t) => t.name === name) ?? builtinThemes[0];
+}
+
 const RULES = (table as { components: Record<string, string> }).components;
 
 function withAlpha(hex: string, alpha: number): string {

@@ -3,7 +3,7 @@ import { pickBackend } from "./backend";
 import { Backdrop, useBackgroundUrl, useRenderSize } from "./components/Backdrop";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
 import { HistoryPanel } from "./components/HistoryPanel";
-import { AgentSidebarBlock, AgentWidget } from "./components/AgentWidget";
+import { AgentWidget } from "./components/AgentWidget";
 import { startUsagePolling } from "./agent/store";
 import { startNotifier } from "./state/notifier";
 import { loadSaved, rebuild, startSaving } from "./state/restore";
@@ -32,7 +32,7 @@ import {
 import { focusedTab, newTabId, orderedTabs, panesOf, useStore } from "./state/store";
 import { useUi } from "./state/ui";
 import { TerminalView, getTerminal, keyContext } from "./terminal/TerminalView";
-import { applyTheme, builtinThemes } from "./theme/theme";
+import { allThemes, applyTheme, findTheme } from "./theme/theme";
 
 
 function measureCharWidth(family: string, size: number): number {
@@ -63,7 +63,7 @@ export function App() {
   const loaded = useSettings((s) => s.loaded);
   const systemDark = useSystemDark();
   const themeName = pickTheme(settings.theme, systemDark);
-  const theme = builtinThemes.find((t) => t.name === themeName) ?? builtinThemes[0];
+  const theme = findTheme(themeName, settings.customThemes);
   const ui = effectiveUiScale(settings);
   const fontSize = effectiveFontSize(settings);
   const mainRef = useRef<HTMLElement>(null);
@@ -99,7 +99,7 @@ export function App() {
   // 后台标签页的提醒：窗口不在前台时闪任务栏、发系统通知
   useEffect(() => startNotifier(backend), [backend]);
 
-  // Agent 用量：开着时才轮询（小窗、侧栏区块、状态栏一段共用这一份数据）
+  // Agent 额度：开着时才轮询（浮动卡片、状态栏一段共用这一份数据）
   const agentOn = loaded && settings.agent.enabled;
   useEffect(() => (agentOn ? startUsagePolling(backend) : undefined), [agentOn, backend]);
 
@@ -170,8 +170,9 @@ export function App() {
   const actions = useMemo(() => makeTabActions({ newTab, close: closeTab, copyText, theme }), [newTab, closeTab, copyText, theme]);
 
   const cycleTheme = useCallback(() => {
-    const i = builtinThemes.findIndex((t) => t.name === themeName);
-    const next = builtinThemes[(i + 1) % builtinThemes.length];
+    const list = allThemes(useSettings.getState().settings.customThemes);
+    const i = list.findIndex((t) => t.name === themeName);
+    const next = list[(i + 1) % list.length];
     useSettings.getState().update((d) => (d.theme = chooseTheme(d.theme, next.name, next.kind)));
     useUi.getState().showNotice(`主题：${next.displayName}`);
   }, [themeName]);
@@ -368,7 +369,7 @@ export function App() {
       {
         id: "agentwin",
         group: "Agent",
-        label: "打开独立的用量小窗（置顶）",
+        label: "打开独立的额度小窗（置顶）",
         icon: "gauge",
         keywords: ["agent", "usage", "claude", "codex", "quota", "额度"],
         run: () => {
@@ -376,10 +377,10 @@ export function App() {
           backend.agentWindow(true).catch((e) => useUi.getState().showNotice(String(e)));
         },
       },
-      { id: "agentset", group: "Agent", label: "Agent 用量设置", icon: "gauge", keywords: ["agent", "claude", "codex"], run: () => useUi.getState().openSettings("agent") },
+      { id: "agentset", group: "Agent", label: "Agent 设置（额度、完成提醒）", icon: "gauge", keywords: ["agent", "claude", "codex", "notify", "提醒"], run: () => useUi.getState().openSettings("agent") },
       { id: "bg", group: "外观", label: "更换背景图", icon: "image", keywords: ["background"], run: () => useUi.getState().openSettings("appearance") },
       { id: "diag", group: "操作", label: "查看诊断信息", icon: "info", keywords: ["diagnostics", "debug"], run: () => useUi.getState().openSettings("shell") },
-      ...builtinThemes.map((t) => ({
+      ...allThemes(settings.customThemes).map((t) => ({
         id: `theme-${t.name}`,
         group: "外观",
         label: `主题：${t.displayName}`,
@@ -399,7 +400,7 @@ export function App() {
       });
     }
     return list;
-  }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys, backend]);
+  }, [tabs, newTab, closeTab, copyText, zoom, fontStep, keys, backend, settings.customThemes]);
 
   const sideDocked = layout.sidebar.mode === "docked";
   const panelDocked = layout.panel.mode === "docked";
@@ -433,7 +434,6 @@ export function App() {
           now={now}
           actions={actions}
           onCycleTheme={cycleTheme}
-          footer={<AgentSidebarBlock backend={backend} />}
         />
       )}
       {layout.sidebar.drawerOpen && <div className="drawer-backdrop" onClick={() => useStore.getState().setDrawerOpen(false)} />}

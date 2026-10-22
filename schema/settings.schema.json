@@ -1,0 +1,669 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/moonmxi/mooncli/main/schema/settings.schema.json",
+  "title": "mooncli 设置",
+  "description": "mooncli 的 settings.json。设置页里的改动都会写到这里；直接编辑也会立即生效。",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "number",
+      "default": 2
+    },
+    "theme": {
+      "description": "主题名（moon-paper / frost / sakura-dawn / celadon / night-voyage / 导入的 custom-*），或 {light, dark, follow} 跟随系统深浅色",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "light": {
+              "type": "string"
+            },
+            "dark": {
+              "type": "string"
+            },
+            "follow": {
+              "enum": [
+                "system",
+                "off"
+              ]
+            }
+          },
+          "required": [
+            "light",
+            "dark",
+            "follow"
+          ]
+        }
+      ],
+      "default": {
+        "light": "moon-paper",
+        "dark": "night-voyage",
+        "follow": "off"
+      }
+    },
+    "zoom": {
+      "description": "整体缩放：界面和终端一起",
+      "type": "number",
+      "default": 1
+    },
+    "uiScale": {
+      "description": "只缩放标题栏、侧栏、状态栏、面板",
+      "type": "number",
+      "default": 1
+    },
+    "font": {
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "终端字体回退链，逗号分隔",
+          "type": "string",
+          "default": "\"Cascadia Code\", \"Cascadia Mono\", Consolas, \"mooncli Symbols\", \"Microsoft YaHei UI\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", monospace, \"Noto Color Emoji\""
+        },
+        "size": {
+          "type": "number",
+          "default": 14
+        },
+        "lineHeight": {
+          "type": "number",
+          "default": 1.2
+        },
+        "weight": {
+          "type": "string",
+          "default": "normal"
+        },
+        "weightBold": {
+          "type": "string",
+          "default": "bold"
+        }
+      }
+    },
+    "background": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "description": "null 不用背景图；builtin:xxx 内置；其它是导入的文件名",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "fit": {
+          "enum": [
+            "cover",
+            "contain",
+            "tile",
+            "center"
+          ],
+          "default": "cover"
+        },
+        "position": {
+          "type": "string",
+          "default": "bottom right"
+        },
+        "opacity": {
+          "type": "number",
+          "default": 0.35
+        },
+        "blur": {
+          "type": "number",
+          "default": 0
+        },
+        "brightness": {
+          "type": "number",
+          "default": 1
+        },
+        "saturation": {
+          "type": "number",
+          "default": 1
+        },
+        "overlay": {
+          "type": "number",
+          "default": 0.6
+        },
+        "scope": {
+          "enum": [
+            "terminal",
+            "window"
+          ],
+          "default": "terminal"
+        }
+      }
+    },
+    "tabs": {
+      "type": "object",
+      "properties": {
+        "position": {
+          "enum": [
+            "left",
+            "top"
+          ],
+          "default": "left"
+        },
+        "sidebar": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "default": 220
+            },
+            "autoCollapse": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "titleSource": {
+          "type": "string",
+          "default": "auto"
+        },
+        "restoreSession": {
+          "description": "打开时恢复上次的标签页",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "scrollback": {
+          "type": "number",
+          "default": 10000
+        },
+        "minimumContrastRatio": {
+          "type": "number",
+          "default": 3
+        },
+        "cursorStyle": {
+          "enum": [
+            "bar",
+            "block",
+            "underline"
+          ],
+          "default": "bar"
+        },
+        "cursorBlink": {
+          "type": "boolean",
+          "default": true
+        },
+        "smoothScrollMs": {
+          "type": "number",
+          "default": 120
+        },
+        "copyOnSelect": {
+          "type": "boolean",
+          "default": false
+        },
+        "trimTrailingWhitespace": {
+          "type": "boolean",
+          "default": true
+        },
+        "confirmMultilinePaste": {
+          "type": "boolean",
+          "default": true
+        },
+        "rightClick": {
+          "enum": [
+            "copyPaste",
+            "menu"
+          ],
+          "default": "copyPaste"
+        },
+        "copyToast": {
+          "type": "boolean",
+          "default": true
+        },
+        "commandMarks": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "shell": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "pwsh 的位置，null 时自动查找",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "args": {
+          "type": "array",
+          "default": []
+        },
+        "integration": {
+          "description": "shell 集成（提示符、命令、目录标记）",
+          "type": "boolean",
+          "default": true
+        },
+        "useBundledConpty": {
+          "type": "boolean",
+          "default": true
+        },
+        "adaptColors": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "ignorePatterns": {
+          "type": "array",
+          "default": []
+        },
+        "importPsreadline": {
+          "type": "boolean",
+          "default": true
+        },
+        "keepDays": {
+          "description": "只保留最近多少天的历史，0 表示一直保留",
+          "type": "number",
+          "default": 0
+        }
+      }
+    },
+    "remote": {
+      "type": "object",
+      "properties": {
+        "connectCommands": {
+          "description": "也当作「连接服务器」的命令（写法和 ssh 一样）",
+          "type": "array",
+          "default": []
+        }
+      }
+    },
+    "agent": {
+      "description": "Agent 额度卡片与完成提醒（Claude Code 与 Codex），docs/07",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "liveQuota": {
+          "description": "通过本机 codex app-server 实时查询 Codex 额度",
+          "type": "boolean",
+          "default": true
+        },
+        "codexPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "notify": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "quietWhenFocused": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "widget": {
+          "type": "object",
+          "properties": {
+            "style": {
+              "enum": [
+                "floating",
+                "off"
+              ],
+              "default": "floating"
+            },
+            "statusBar": {
+              "type": "boolean",
+              "default": true
+            },
+            "anchor": {
+              "enum": [
+                "bottom-right",
+                "bottom-left",
+                "top-right",
+                "top-left"
+              ],
+              "default": "bottom-right"
+            },
+            "opacity": {
+              "type": "number",
+              "default": 0.95
+            },
+            "warnAt": {
+              "type": "number",
+              "default": 0.7
+            },
+            "dangerAt": {
+              "type": "number",
+              "default": 0.9
+            }
+          }
+        }
+      }
+    },
+    "notifications": {
+      "description": "后台标签页需要关注、窗口又不在前台时的提醒",
+      "type": "object",
+      "properties": {
+        "taskbar": {
+          "type": "boolean",
+          "default": true
+        },
+        "system": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "properties": {
+        "pinnedRequestsPwsh": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "customThemes": {
+      "description": "导入的配色（结构见 theme.schema.json）",
+      "type": "array",
+      "items": {
+        "$ref": "theme.schema.json"
+      },
+      "default": []
+    },
+    "keys": {
+      "description": "改过的快捷键：操作 → 按键列表，比如 \"newTab\": [\"Ctrl+T\"]",
+      "type": "object",
+      "properties": {
+        "newTab": {
+          "description": "新建标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+T"
+          ]
+        },
+        "closeTab": {
+          "description": "关闭标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+W"
+          ]
+        },
+        "duplicateTab": {
+          "description": "复制标签页（同一目录）",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+D"
+          ]
+        },
+        "nextTab": {
+          "description": "下一个标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Tab"
+          ]
+        },
+        "prevTab": {
+          "description": "上一个标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+Tab"
+          ]
+        },
+        "renameTab": {
+          "description": "重命名标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "pinTab": {
+          "description": "置顶 / 取消置顶标签页",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "toggleSidebar": {
+          "description": "收起 / 展开标签栏",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+B"
+          ]
+        },
+        "palette": {
+          "description": "命令面板",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+P"
+          ]
+        },
+        "history": {
+          "description": "历史命令",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+R"
+          ]
+        },
+        "settings": {
+          "description": "设置",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+,"
+          ]
+        },
+        "zoomIn": {
+          "description": "放大（整体）",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+=",
+            "Ctrl+Shift+=",
+            "Ctrl+Num+"
+          ]
+        },
+        "zoomOut": {
+          "description": "缩小（整体）",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+-",
+            "Ctrl+Num-"
+          ]
+        },
+        "zoomReset": {
+          "description": "恢复默认缩放",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+0",
+            "Ctrl+Num0"
+          ]
+        },
+        "fontBigger": {
+          "description": "终端字号加大",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "fontSmaller": {
+          "description": "终端字号减小",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "clearScreen": {
+          "description": "清除屏幕",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "cycleTheme": {
+          "description": "换一个主题",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "copyCwd": {
+          "description": "复制当前目录路径",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "find": {
+          "description": "在输出中查找",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+F"
+          ]
+        },
+        "prevCommand": {
+          "description": "跳到上一条命令",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Up"
+          ]
+        },
+        "nextCommand": {
+          "description": "跳到下一条命令",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Down"
+          ]
+        },
+        "selectOutput": {
+          "description": "选中这条命令的输出",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+A"
+          ]
+        },
+        "complete": {
+          "description": "补全面板",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Space",
+            "Alt+/"
+          ]
+        },
+        "splitRight": {
+          "description": "向右分屏",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+E"
+          ]
+        },
+        "splitDown": {
+          "description": "向下分屏",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Ctrl+Shift+O"
+          ]
+        },
+        "closePane": {
+          "description": "关闭当前窗格",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "focusNextPane": {
+          "description": "切到下一个窗格",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Alt+`"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    }
+  }
+}

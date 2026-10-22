@@ -132,6 +132,8 @@ interface State {
   rename(id: string, title?: string): void;
   setEditing(id?: string): void;
   togglePin(id: string): void;
+  /** 拖动排序：把 id 放到 target 的位置（从上往下拖放在它后面，从下往上拖放在它前面）。置顶的和没置顶的各排各的 */
+  moveTab(id: string, target: string): void;
   setColor(id: string, color?: TabColor): void;
   apply(id: string, msg: SessionMsg, now?: number): void;
   rememberOpenWidth(w: number): void;
@@ -310,6 +312,20 @@ export const useStore = create<State>((set, get) => {
 
     setEditing(id) {
       set({ editingId: id });
+    },
+
+    moveTab(id, target) {
+      set((s) => {
+        const from = s.tabs.findIndex((t) => t.id === id);
+        const to = s.tabs.findIndex((t) => t.id === target);
+        if (from < 0 || to < 0 || from === to) return {};
+        // 不能拖过置顶分界线
+        if (!!s.tabs[from].pinned !== !!s.tabs[to].pinned) return {};
+        const tabs = [...s.tabs];
+        const [moving] = tabs.splice(from, 1);
+        tabs.splice(tabs.findIndex((t) => t.id === target) + (from < to ? 1 : 0), 0, moving);
+        return { tabs };
+      });
     },
 
     togglePin(id) {

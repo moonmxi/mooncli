@@ -1,16 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { UsageReport } from "../backend/types";
-import { accountFor, compactSummary, contextPercent, formatElapsed, formatResetIn, formatTokens, levelOf, pickAccount, pickSession, windowLabel } from "./usage";
-
-describe("windowLabel", () => {
-  it("认分钟数不认套餐", () => {
-    expect(windowLabel(300)).toBe("5 小时");
-    expect(windowLabel(10080)).toBe("本周");
-    expect(windowLabel(60)).toBe("1 小时");
-    expect(windowLabel(45)).toBe("45 分钟");
-    expect(windowLabel(undefined)).toBe("额度");
-  });
-});
+import type { AgentAccountUsage } from "../backend/types";
+import type { Tab } from "../state/store";
+import { claudeSnippet, codexSnippet } from "./manual";
+import { agentFocus, compactSummary, formatResetIn, formatTokens, levelOf, shownPercent, worstPercent } from "./usage";
 
 describe("formatTokens", () => {
   it("k / M 缩写", () => {
@@ -23,94 +15,68 @@ describe("formatTokens", () => {
 
 describe("formatResetIn", () => {
   const now = 1_792_627_200;
-  it("各档文案", () => {
-    expect(formatResetIn(now + 42 * 60, now)).toBe("42 分钟后重置");
-    expect(formatResetIn(now + 2 * 3600 + 18 * 60, now)).toBe("2 小时 18 分后重置");
-    expect(formatResetIn(now + 3 * 3600, now)).toBe("3 小时后重置");
-    expect(formatResetIn(now + 3 * 86400, now)).toBe("3 天后重置");
-    expect(formatResetIn(now - 5, now)).toBe("已重置");
+  it("各档文案，过了重置点为空", () => {
+    expect(formatResetIn(now + 42 * 60, now)).toBe("42 分钟");
+    expect(formatResetIn(now + 2 * 3600 + 18 * 60, now)).toBe("2 小时 18 分");
+    expect(formatResetIn(now + 3 * 3600, now)).toBe("3 小时");
+    expect(formatResetIn(now + 3 * 86400, now)).toBe("3 天");
+    expect(formatResetIn(now - 5, now)).toBeNull();
     expect(formatResetIn(undefined, now)).toBeNull();
   });
 });
 
-describe("levelOf / contextPercent", () => {
+describe("额度显示", () => {
+  const now = 1000;
+  const claude: AgentAccountUsage = {
+    kind: "claude",
+    fiveHour: { usedPercent: 45.6, windowMinutes: 300, resetsAt: now + 60 },
+    sevenDay: { usedPercent: 6, windowMinutes: 10080, resetsAt: now + 86400 },
+    updatedAt: now,
+    source: "statusLine",
+  };
   it("阈值分档", () => {
     expect(levelOf(0.5, 0.7, 0.9)).toBe("ok");
     expect(levelOf(0.7, 0.7, 0.9)).toBe("warn");
     expect(levelOf(0.95, 0.7, 0.9)).toBe("danger");
-    expect(contextPercent(250, 200)).toBe(100);
-    expect(contextPercent(50, 0)).toBe(0);
   });
-});
-
-describe("formatElapsed", () => {
-  it("分钟与小时", () => {
-    expect(formatElapsed(0, 14 * 60000)).toBe("14m");
-    expect(formatElapsed(0, 65 * 60000)).toBe("1h 05m");
+  it("过了重置点按 0% 显示", () => {
+    expect(shownPercent(claude.fiveHour!, now)).toBe(45.6);
+    expect(shownPercent(claude.fiveHour!, now + 61)).toBe(0);
   });
-});
-
-const report: UsageReport = {
-  sessions: [
-    { kind: "codex", sessionId: "s-old", cwd: "C:\\work\\a", state: "unknown", updatedAt: 100, source: "sessionFile" },
-    { kind: "codex", sessionId: "s-tab", tabSessionId: "tab-1", cwd: "C:\\work\\b", state: "running", updatedAt: 90, source: "sessionFile" },
-    { kind: "codex", sessionId: "s-dir", cwd: "c:/work/b/", state: "waiting", updatedAt: 95, source: "sessionFile" },
-  ],
-  accounts: [{ kind: "codex", updatedAt: 90, source: "live" }],
-};
-
-describe("pickSession", () => {
-  it("优先标签页自己的会话", () => {
-    const picked = pickSession(report, { id: "tab-1" } as never);
-    expect(picked?.session.sessionId).toBe("s-tab");
-    expect(picked?.via).toBe("tab");
-  });
-  it("其次同目录（路径写法不同也能对上）", () => {
-    const picked = pickSession(report, { id: "tab-2", cwd: "C:\\work\\B" } as never);
-    expect(picked?.session.sessionId).toBe("s-dir");
-    expect(picked?.via).toBe("cwd");
-  });
-  it("最后最近活动的", () => {
-    const picked = pickSession(report, { id: "tab-3", cwd: "D:\\elsewhere" } as never);
-    expect(picked?.session.sessionId).toBe("s-old");
-    expect(picked?.via).toBe("recent");
-  });
-  it("没有会话时为空", () => {
-    expect(pickSession({ sessions: [], accounts: [] })).toBeNull();
-  });
-  it("accountFor 找到账号用量", () => {
-    expect(accountFor(report, "codex")?.kind).toBe("codex");
-    expect(accountFor({ sessions: [], accounts: [] }, "codex")).toBeUndefined();
-  });
-});
-
-describe("compactSummary / pickAccount", () => {
-  const now = 1_000_000;
-  it("状态栏摘要，过期窗口按 0%", () => {
-    expect(
-      compactSummary(
-        {
-          kind: "claude",
-          primary: { usedPercent: 37.6, windowMinutes: 300, resetsAt: now - 1, estimated: false },
-          secondary: { usedPercent: 21.2, windowMinutes: 10080, resetsAt: now + 99, estimated: false },
-          updatedAt: now,
-          source: "statusLine",
-        },
-        now,
-      ),
-    ).toBe("5h 0% · 周 21%");
-    expect(compactSummary({ kind: "codex", updatedAt: now, source: "live" }, now)).toBeNull();
+  it("状态栏摘要：5 小时 · 7 天，缺的窗口写 –", () => {
+    expect(compactSummary(claude, now)).toBe("Claude 46% · 6%");
+    expect(compactSummary({ ...claude, kind: "codex", fiveHour: undefined }, now)).toBe("Codex – · 6%");
     expect(compactSummary(undefined, now)).toBeNull();
+    expect(worstPercent([claude], now)).toBe(45.6);
   });
-  it("没有会话时取最新的账号", () => {
-    const r: UsageReport = {
-      sessions: [],
-      accounts: [
-        { kind: "codex", updatedAt: 5, source: "live" },
-        { kind: "claude", updatedAt: 9, source: "statusLine" },
-      ],
-    };
-    expect(pickAccount(r)?.kind).toBe("claude");
-    expect(pickAccount(r, { kind: "codex" } as never)?.kind).toBe("codex");
+});
+
+describe("agentFocus", () => {
+  const tab = (running?: Tab["running"], extra: Partial<Tab> = {}): Tab => ({
+    id: "t1",
+    profile: "日常",
+    title: {},
+    cwd: "D:/work",
+    shellState: "running",
+    running,
+    ...extra,
+  });
+  it("只有本机正在跑 Claude Code / Codex 时才查上下文", () => {
+    expect(agentFocus(tab({ kind: "claude", since: 5 }))).toEqual({ kind: "claude", tabId: "t1", cwd: "D:/work", sinceMs: 5 });
+    expect(agentFocus(tab({ kind: "codex", since: 7 }))?.kind).toBe("codex");
+    expect(agentFocus(tab({ kind: "node", since: 5 }))).toBeUndefined();
+    expect(agentFocus(tab(undefined))).toBeUndefined();
+    expect(agentFocus(tab({ kind: "claude", since: 5, remote: true }))).toBeUndefined();
+    expect(agentFocus(undefined)).toBeUndefined();
+  });
+});
+
+describe("手动配置", () => {
+  it("路径换成正斜杠，hooks 三个事件", () => {
+    const c = JSON.parse(claudeSnippet("C:\\Program Files\\mooncli\\mooncli-bridge.exe"));
+    expect(c.statusLine.command).toBe('"C:/Program Files/mooncli/mooncli-bridge.exe" claude-statusline');
+    expect(Object.keys(c.hooks)).toEqual(["UserPromptSubmit", "Notification", "Stop"]);
+    expect(c.hooks.Stop[0].hooks[0].command).toBe('"C:/Program Files/mooncli/mooncli-bridge.exe" claude-hook');
+    expect(codexSnippet("C:\\a b\\mooncli-bridge.exe")).toBe("notify = ['C:/a b/mooncli-bridge.exe', 'codex-notify']");
   });
 });

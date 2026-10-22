@@ -1,28 +1,31 @@
 //! Codex 会话文件（rollout JSONL）解析。格式依据 openai/codex 源码核实（2026-10-22）：
-//! - 文件在 `$CODEX_HOME/sessions/年/月/日/rollout-*.jsonl`，归档的在 `archived_sessions/`。
+//! - 文件在 `$CODEX_HOME/sessions/年/月/日/rollout-<时间>-<thread id>.jsonl`。
 //! - 每行是 `{timestamp, type, payload}`；首行 `type = "session_meta"`，payload 带 `id`、`cwd`。
 //! - 用量事件是 `type = "event_msg"` 且 `payload.type = "token_count"`：payload 的 `info`
 //!   给 token 用量和 `model_context_window`，`rate_limits` 是后端下发、客户端落盘的额度快照
 //!   （primary/secondary 各带 used_percent、window_minutes、resets_at epoch 秒、plan_type）。
 //!   读它等于读官方 /status 的同源数据，不需要任何凭证。
-//! - 窗口语义认 window_minutes 动态判断，任一窗口都可能缺席（例如 Pro 没有 5 小时窗口）。
+//!
+//! 额度优先用 codex app-server 实时查询（codex_live），会话文件只是没法实时查询时的退路。
 
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::Focus;
 use crate::jsonl::{collect_jsonl, first_line, tail_lines};
-use crate::model::{AccountUsage, AgentKind, ContextUsage, RateWindow, SessionState, SessionUsage, SnapshotSource};
+use crate::model::{AccountUsage, AgentKind, ContextUsage, CurrentSession, RateWindow, SnapshotSource};
 use crate::spool::{list_entries, read_entry};
 use crate::timeutil::file_mtime_epoch;
 
-/// 一次最多看多少个最近的会话文件，避免老机器上扫全历史。
-const MAX_FILES: usize = 60;
-/// 小窗最多列多少个 Codex 会话。
-const MAX_SESSIONS: usize = 20;
+/// 找账号额度时最多翻几个最近的会话文件（最新的那个通常就有）。
+const ACCOUNT_FILES: usize = 8;
 /// 尾部扫描的起始/最大范围（字节）。token_count 每轮都有，通常一探即中。
 const TAIL_START: u64 = 256 * 1024;
 const TAIL_MAX: u64 = 4 * 1024 * 1024;
+/// Codex 算上下文剩余时扣掉的固定开销（系统提示词、工具定义），和它界面上显示的百分比对齐。
+/// 见 codex-rs/protocol 的 `TokenUsage::percent_of_context_window_remaining`。
+const BASELINE_TOKENS: i64 = 12_000;
 
 /// Codex 数据目录：环境变量 CODEX_HOME（可逗号分隔多个）优先，否则 ~/.codex。
 pub fn codex_homes() -> Vec<PathBuf> {
@@ -44,28 +47,37 @@ pub struct TokenCount {
 }
 
 fn rate_window(v: &Value) -> Option<RateWindow> {
-    let used = v.get("used_percent")?.as_f64()?;
     Some(RateWindow {
-        used_percent: used,
-        window_minutes: v.get("window_minutes").and_then(|x| x.as_i64()),
-        resets_at: v.get("resets_at").and_then(|x| x.as_i64()),
-        estimated: false,
+        used_percent: v.get("used_percent")?.as_f64()?,
+        window_minutes: v.get("window_minutes").and_then(Value::as_i64),
+        resets_at: v.get("resets_at").and_then(Value::as_i64),
     })
 }
 
+/// 上下文占用：最近一轮的 total_tokens 就是当前上下文里的量（Codex 自己也这么算）。
+fn context_usage(info: &Value) -> Option<ContextUsage> {
+    let window = info.get("model_context_window")?.as_i64()?;
+    let last = info.get("last_token_usage")?;
+    let used = last
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .or_else(|| last.get("input_tokens").and_then(Value::as_i64))?;
+    let mut ctx = ContextUsage::simple(used, window);
+    if window > BASELINE_TOKENS {
+        let effective = (window - BASELINE_TOKENS) as f64;
+        let used_eff = (used - BASELINE_TOKENS).max(0) as f64;
+        ctx.used_percent = (used_eff / effective * 100.0).clamp(0.0, 100.0);
+    }
+    Some(ctx)
+}
+
 fn parse_token_count(payload: &Value) -> TokenCount {
-    let info = payload.get("info");
-    let context = info.and_then(|info| {
-        let window = info.get("model_context_window")?.as_i64()?;
-        let used = info.get("last_token_usage")?.get("input_tokens")?.as_i64()?;
-        Some(ContextUsage { used_tokens: used, window_tokens: window })
-    });
     let limits = payload.get("rate_limits");
     TokenCount {
-        context,
+        context: payload.get("info").and_then(context_usage),
         primary: limits.and_then(|l| l.get("primary")).and_then(rate_window),
         secondary: limits.and_then(|l| l.get("secondary")).and_then(rate_window),
-        plan: limits.and_then(|l| l.get("plan_type")).and_then(|p| p.as_str()).map(|s| s.to_string()),
+        plan: limits.and_then(|l| l.get("plan_type")).and_then(Value::as_str).map(str::to_string),
     }
 }
 
@@ -78,38 +90,32 @@ pub struct RolloutInfo {
 
 /// 解析一个 rollout 文件：首行 session_meta + 尾部最新 token_count / turn_context。
 pub fn parse_rollout(path: &Path) -> Option<RolloutInfo> {
-    let meta_line = first_line(path)?;
-    let meta: Value = serde_json::from_str(&meta_line).ok()?;
+    let meta: Value = serde_json::from_str(&first_line(path)?).ok()?;
     if meta.get("type")?.as_str()? != "session_meta" {
         return None;
     }
     let payload = meta.get("payload")?;
     let session_id = payload.get("id")?.as_str()?.to_string();
-    let mut cwd = payload.get("cwd").and_then(|c| c.as_str()).map(|s| s.to_string());
+    let mut cwd = payload.get("cwd").and_then(Value::as_str).map(str::to_string);
 
-    // 尾部扫描：从后往前找最后一个 token_count 和最后一个 turn_context。
     let mut token_count = None;
     let mut model = None;
     let mut tail = TAIL_START;
     loop {
-        let lines = tail_lines(path, tail);
-        for line in lines.iter().rev() {
+        for line in tail_lines(path, tail).iter().rev() {
             let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-            match v.get("type").and_then(|t| t.as_str()) {
-                Some("event_msg") => {
-                    let p = v.get("payload");
-                    if token_count.is_none()
-                        && p.and_then(|p| p.get("type")).and_then(|t| t.as_str()) == Some("token_count")
+            match v.get("type").and_then(Value::as_str) {
+                Some("event_msg") if token_count.is_none() => {
+                    if let Some(p) =
+                        v.get("payload").filter(|p| p.get("type").and_then(Value::as_str) == Some("token_count"))
                     {
-                        token_count = Some(parse_token_count(p.unwrap()));
+                        token_count = Some(parse_token_count(p));
                     }
                 }
-                Some("turn_context") => {
-                    if model.is_none()
-                        && let Some(p) = v.get("payload")
-                    {
-                        model = p.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
-                        if let Some(c) = p.get("cwd").and_then(|c| c.as_str()) {
+                Some("turn_context") if model.is_none() => {
+                    if let Some(p) = v.get("payload") {
+                        model = p.get("model").and_then(Value::as_str).map(str::to_string);
+                        if let Some(c) = p.get("cwd").and_then(Value::as_str) {
                             cwd = Some(c.to_string());
                         }
                     }
@@ -125,79 +131,72 @@ pub fn parse_rollout(path: &Path) -> Option<RolloutInfo> {
         }
         tail *= 4;
     }
-
     Some(RolloutInfo { session_id, cwd, model, token_count })
 }
 
-/// 把 notify 的记录并进会话快照（docs/07 第 4 节）：notify 目前只有 agent-turn-complete
-/// 一个事件——它比会话文件新时，该会话标为「本轮已完成」，并带上 mooncli 标签页的关联。
-fn apply_notify(sessions: &mut [SessionUsage], agent_dir: &Path) {
-    for path in list_entries(agent_dir, "codex-notify-") {
-        let Some(entry) = read_entry(&path) else { continue };
-        let Some(thread_id) = entry.payload.get("thread-id").and_then(|v| v.as_str()) else { continue };
-        let Some(session) = sessions.iter_mut().find(|s| s.session_id == thread_id) else { continue };
-        if session.tab_session_id.is_none() {
-            session.tab_session_id = entry.tab_session_id.clone();
-        }
-        if entry.received_at >= session.updated_at {
-            if entry.payload.get("type").and_then(|v| v.as_str()) == Some("agent-turn-complete") {
-                session.state = SessionState::Done;
-            }
-            session.updated_at = entry.received_at;
-        }
-    }
-}
-
-/// 扫描所有 Codex 数据目录，返回（会话快照，账号用量）。
-/// 账号额度取 mtime 最新文件里的 rate_limits——那是该账号最近一次模型响应落盘的快照。
-/// `agent_dir` 给了且里面有 notify 的 spool 记录时，并入会话状态（见 apply_notify）。
-pub fn collect(homes: &[PathBuf], agent_dir: Option<&Path>) -> (Vec<SessionUsage>, Option<AccountUsage>) {
-    let mut files: Vec<PathBuf> = Vec::new();
+/// 所有会话文件，最近改过的在前（带 mtime）。
+fn rollouts_by_mtime(homes: &[PathBuf]) -> Vec<(i64, PathBuf)> {
+    let mut files = Vec::new();
     for home in homes {
         collect_jsonl(&home.join("sessions"), &mut files);
-        collect_jsonl(&home.join("archived_sessions"), &mut files);
     }
-    files.sort_by_key(|p| std::cmp::Reverse(file_mtime_epoch(p).unwrap_or(0)));
-    files.truncate(MAX_FILES);
+    let mut out: Vec<(i64, PathBuf)> = files.into_iter().filter_map(|p| file_mtime_epoch(&p).map(|t| (t, p))).collect();
+    out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    out
+}
 
-    let mut sessions = Vec::new();
-    let mut account: Option<AccountUsage> = None;
-    for path in &files {
-        let Some(info) = parse_rollout(path) else { continue };
-        let updated_at = file_mtime_epoch(path).unwrap_or(0);
-        if account.is_none()
-            && let Some(tc) = &info.token_count
-            && (tc.primary.is_some() || tc.secondary.is_some())
-        {
-            account = Some(AccountUsage {
-                kind: AgentKind::Codex,
-                primary: tc.primary.clone(),
-                secondary: tc.secondary.clone(),
-                plan: tc.plan.clone(),
-                updated_at,
-                source: SnapshotSource::SessionFile,
-            });
-        }
-        if sessions.len() < MAX_SESSIONS
-            && let Some(tc) = &info.token_count
-        {
-            sessions.push(SessionUsage {
-                kind: AgentKind::Codex,
-                session_id: info.session_id.clone(),
-                tab_session_id: None,
-                cwd: info.cwd.clone(),
-                model: info.model.clone(),
-                context: tc.context.clone(),
-                state: SessionState::Unknown,
-                updated_at,
-                source: SnapshotSource::SessionFile,
-            });
+/// 会话文件里最新的额度快照（实时查询不可用时的退路）。
+pub fn latest_account(homes: &[PathBuf]) -> Option<AccountUsage> {
+    for (mtime, path) in rollouts_by_mtime(homes).into_iter().take(ACCOUNT_FILES) {
+        let Some(tc) = parse_rollout(&path).and_then(|i| i.token_count) else { continue };
+        if let Some(a) = AccountUsage::from_windows(
+            AgentKind::Codex,
+            tc.primary,
+            tc.secondary,
+            tc.plan,
+            mtime,
+            SnapshotSource::SessionFile,
+        ) {
+            return Some(a);
         }
     }
-    if let Some(dir) = agent_dir {
-        apply_notify(&mut sessions, dir);
+    None
+}
+
+fn same_dir(a: &str, b: &str) -> bool {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// 当前标签页里正在跑的 Codex 会话的上下文。依次看：
+/// 1. 这个标签页送来的 notify（带 thread id，直接对上会话文件）；
+/// 2. 本次运行以来写过、目录和标签页一致的最新会话文件。
+pub fn current(homes: &[PathBuf], agent_dir: &Path, focus: &Focus) -> CurrentSession {
+    let mut cur = CurrentSession { kind: AgentKind::Codex, model: None, context: None, updated_at: focus.since };
+    let thread = list_entries(agent_dir, "codex-notify-")
+        .iter()
+        .filter_map(|p| read_entry(p))
+        .filter(|e| e.tab_session_id.as_deref() == Some(focus.tab_id.as_str()) && e.received_at >= focus.since)
+        .max_by_key(|e| e.received_at)
+        .and_then(|e| e.payload.get("thread-id").and_then(Value::as_str).map(str::to_string));
+    let files: Vec<(i64, PathBuf)> =
+        rollouts_by_mtime(homes).into_iter().take_while(|(t, _)| *t >= focus.since).collect();
+    let by_thread = thread.and_then(|id| {
+        files.iter().find(|(_, p)| p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.ends_with(&id))).cloned()
+    });
+    let found = by_thread.and_then(|(t, p)| parse_rollout(&p).map(|i| (t, i))).or_else(|| {
+        let cwd = focus.cwd.as_deref()?;
+        files.iter().find_map(|(t, p)| {
+            let info = parse_rollout(p)?;
+            info.cwd.as_deref().is_some_and(|c| same_dir(c, cwd)).then_some((*t, info))
+        })
+    });
+    if let Some((mtime, info)) = found {
+        cur.updated_at = mtime;
+        cur.model = info.model;
+        cur.context = info.token_count.and_then(|tc| tc.context);
     }
-    (sessions, account)
+    cur
 }
 
 #[cfg(test)]
@@ -206,6 +205,7 @@ mod tests {
     use std::io::Write;
 
     fn write_rollout(dir: &Path, name: &str, lines: &[&str]) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();
         for line in lines {
@@ -214,72 +214,78 @@ mod tests {
         path
     }
 
+    const ID: &str = "019d0000-1111-7222-8333-444455556666";
     const META: &str = r#"{"timestamp":"2026-10-22T02:00:00.000Z","type":"session_meta","payload":{"id":"019d0000-1111-7222-8333-444455556666","timestamp":"2026-10-22T02:00:00.000Z","cwd":"C:\\work\\demo","originator":"codex_cli_rs","cli_version":"0.50.0","source":"cli","model_provider":"openai"}}"#;
     const TURN: &str = r#"{"timestamp":"2026-10-22T02:00:01.000Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"C:\\work\\demo","model":"gpt-5-codex"}}"#;
-    const COUNT: &str = r#"{"timestamp":"2026-10-22T02:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":4000,"output_tokens":800,"reasoning_output_tokens":300,"total_tokens":9800},"last_token_usage":{"input_tokens":3000,"cached_input_tokens":2000,"output_tokens":200,"reasoning_output_tokens":50,"total_tokens":3200},"model_context_window":500000},"rate_limits":{"limit_id":"codex","primary":{"used_percent":42.0,"window_minutes":300,"resets_at":1792700000},"secondary":{"used_percent":17.5,"window_minutes":10080,"resets_at":1793200000},"credits":{"has_credits":false,"unlimited":false,"balance":null},"plan_type":"plus","rate_limit_reached_type":null}}}"#;
+    const COUNT: &str = r#"{"timestamp":"2026-10-22T02:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":90000,"cached_input_tokens":4000,"output_tokens":800,"reasoning_output_tokens":300,"total_tokens":90800},"last_token_usage":{"input_tokens":30000,"cached_input_tokens":2000,"output_tokens":2000,"reasoning_output_tokens":50,"total_tokens":32000},"model_context_window":272000},"rate_limits":{"limit_id":"codex","primary":{"used_percent":42.0,"window_minutes":300,"resets_at":1792700000},"secondary":{"used_percent":17.5,"window_minutes":10080,"resets_at":1793200000},"credits":{"has_credits":false,"unlimited":false,"balance":null},"plan_type":"plus","rate_limit_reached_type":null}}}"#;
+
+    fn sessions(home: &Path) -> PathBuf {
+        home.join("sessions").join("2026").join("10").join("22")
+    }
 
     #[test]
     fn parses_rollout_end_to_end() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_rollout(dir.path(), "rollout-2026-10-22T10-00-00-019d0000.jsonl", &[META, TURN, COUNT]);
+        let path = write_rollout(dir.path(), &format!("rollout-2026-10-22T10-00-00-{ID}.jsonl"), &[META, TURN, COUNT]);
         let info = parse_rollout(&path).expect("应能解析");
-        assert_eq!(info.session_id, "019d0000-1111-7222-8333-444455556666");
+        assert_eq!(info.session_id, ID);
         assert_eq!(info.cwd.as_deref(), Some("C:\\work\\demo"));
         assert_eq!(info.model.as_deref(), Some("gpt-5-codex"));
         let tc = info.token_count.expect("应有 token_count");
         let ctx = tc.context.expect("应有上下文");
-        assert_eq!(ctx.used_tokens, 3000);
-        assert_eq!(ctx.window_tokens, 500000);
+        assert_eq!((ctx.used_tokens, ctx.window_tokens), (32000, 272000));
+        // 和 Codex 自己的口径一致：(32000-12000)/(272000-12000)
+        assert!((ctx.used_percent - 7.69).abs() < 0.01);
         assert_eq!(tc.primary.unwrap().used_percent, 42.0);
-        let secondary = tc.secondary.unwrap();
-        assert_eq!(secondary.window_minutes, Some(10080));
-        assert_eq!(secondary.resets_at, Some(1793200000));
+        assert_eq!(tc.secondary.unwrap().resets_at, Some(1793200000));
         assert_eq!(tc.plan.as_deref(), Some("plus"));
     }
 
     #[test]
-    fn tolerates_missing_windows_and_fields() {
-        // Pro 套餐 primary 缺席、老文件没有 cache_write 字段，都不应失败
-        let count = r#"{"timestamp":"2026-10-22T02:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1,"total_tokens":11},"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1,"total_tokens":11},"model_context_window":200000},"rate_limits":{"secondary":{"used_percent":3.0,"window_minutes":10080,"resets_at":1793200000},"plan_type":"pro"}}}"#;
+    fn tolerates_missing_windows() {
+        // Pro 套餐 primary 缺席，只有周窗口
+        let count = r#"{"timestamp":"2026-10-22T02:01:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"secondary":{"used_percent":3.0,"window_minutes":10080,"resets_at":1793200000},"plan_type":"pro"}}}"#;
         let dir = tempfile::tempdir().unwrap();
-        let path = write_rollout(dir.path(), "r.jsonl", &[META, count]);
-        let info = parse_rollout(&path).unwrap();
-        let tc = info.token_count.unwrap();
-        assert!(tc.primary.is_none());
-        assert_eq!(tc.secondary.unwrap().used_percent, 3.0);
+        write_rollout(&sessions(dir.path()), "r.jsonl", &[META, count]);
+        let a = latest_account(&[dir.path().to_path_buf()]).unwrap();
+        assert!(a.five_hour.is_none());
+        assert_eq!(a.seven_day.unwrap().used_percent, 3.0);
+        assert_eq!(a.plan.as_deref(), Some("pro"));
     }
 
     #[test]
-    fn collect_picks_freshest_account_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let sessions = dir.path().join("sessions").join("2026").join("10").join("22");
-        std::fs::create_dir_all(&sessions).unwrap();
-        write_rollout(&sessions, "rollout-a.jsonl", &[META, TURN, COUNT]);
-        let (list, account) = collect(&[dir.path().to_path_buf()], None);
-        assert_eq!(list.len(), 1);
-        let account = account.expect("应有账号用量");
-        assert_eq!(account.kind, AgentKind::Codex);
-        assert_eq!(account.primary.unwrap().used_percent, 42.0);
-    }
-
-    #[test]
-    fn notify_marks_session_done_and_links_tab() {
+    fn current_finds_session_by_notify_thread_or_cwd() {
         use crate::spool::{SpoolEntry, codex_notify_file_name, write_entry};
         let dir = tempfile::tempdir().unwrap();
-        let sessions = dir.path().join("sessions").join("2026").join("10").join("22");
-        std::fs::create_dir_all(&sessions).unwrap();
-        write_rollout(&sessions, "rollout-a.jsonl", &[META, TURN, COUNT]);
-        let agent_dir = dir.path().join("agent");
-        let entry = SpoolEntry {
-            received_at: 4_000_000_000, // 远晚于文件 mtime
-            tab_session_id: Some("tab-9".into()),
-            payload: serde_json::json!({ "type": "agent-turn-complete", "thread-id": "019d0000-1111-7222-8333-444455556666", "cwd": "C:\\work\\demo" }),
+        let home = dir.path().to_path_buf();
+        write_rollout(&sessions(&home), &format!("rollout-2026-10-22T10-00-00-{ID}.jsonl"), &[META, TURN, COUNT]);
+        let agent = dir.path().join("agent");
+        let focus = |cwd: Option<&str>, since: i64| Focus {
+            kind: AgentKind::Codex,
+            tab_id: "tab-9".into(),
+            cwd: cwd.map(str::to_string),
+            since,
         };
-        write_entry(&agent_dir, &codex_notify_file_name("019d0000-1111-7222-8333-444455556666"), &entry).unwrap();
-        let (list, _) = collect(&[dir.path().to_path_buf()], Some(&agent_dir));
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].state, SessionState::Done);
-        assert_eq!(list[0].tab_session_id.as_deref(), Some("tab-9"));
-        assert_eq!(list[0].updated_at, 4_000_000_000);
+        // 按目录（大小写、斜杠不同也算同一个）
+        let cur = current(std::slice::from_ref(&home), &agent, &focus(Some("c:/work/demo/"), 0));
+        assert_eq!(cur.context.unwrap().used_tokens, 32000);
+        assert_eq!(cur.model.as_deref(), Some("gpt-5-codex"));
+        assert!(current(std::slice::from_ref(&home), &agent, &focus(Some(r"C:\other"), 0)).context.is_none());
+        // 运行开始之后没写过的文件不算
+        assert!(
+            current(std::slice::from_ref(&home), &agent, &focus(Some(r"C:\work\demo"), i64::MAX)).context.is_none()
+        );
+        // notify 带来的 thread id 优先，不看目录
+        write_entry(
+            &agent,
+            &codex_notify_file_name(ID),
+            &SpoolEntry {
+                received_at: 5,
+                tab_session_id: Some("tab-9".into()),
+                payload: serde_json::json!({ "type": "agent-turn-complete", "thread-id": ID }),
+            },
+        )
+        .unwrap();
+        assert!(current(std::slice::from_ref(&home), &agent, &focus(None, 0)).context.is_some());
     }
 }

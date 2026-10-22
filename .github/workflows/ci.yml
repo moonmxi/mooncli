@@ -172,9 +172,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $file = if (Test-Path signed/mooncli-setup-x64.exe) { "signed/mooncli-setup-x64.exe" } else { "unsigned/mooncli-setup-x64.exe" }
-          $note = if ($file -like "signed/*") { "安装包已签名（SignPath Foundation 免费提供的开源项目证书）。" } else { "这个版本的安装包没有签名，Windows 可能会提示「未知发布者」。" }
+          $note = if ($file -like "signed/*") { "安装包已签名（SignPath Foundation 免费提供的开源项目证书）。" } else { "这个版本的安装包没有签名，Windows 可能会提示「未知发布者」：点「更多信息 → 仍要运行」即可。" }
           $tag = $env:RELEASE_TAG
-          $notes = "下载 mooncli-setup-x64.exe 直接运行即可安装。`n`n$note"
+          # 说明取 CHANGELOG.md 里这个版本的一节（## v0.2.0 到下一个 ## 之间），没有就只写安装说明
+          $log = Get-Content CHANGELOG.md -Raw -Encoding utf8
+          $m = [regex]::Match($log, '(?ms)^## ' + [regex]::Escape($tag) + '[ \t]*\r?$(.*?)(?=^## |\z)')
+          $changes = if ($m.Success) { $m.Groups[1].Value.Trim() + "`n`n" } else { "" }
+          $notes = "$changes## 安装`n`n下载 mooncli-setup-x64.exe 直接运行即可安装（需要 Windows 10 / 11 和 PowerShell 7，没装的话 mooncli 会引导安装）。`n`n$note"
           # 在网页上用"新建发布"创建标签时，发布已经存在：只补上安装包和说明
           gh release view $tag 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) {

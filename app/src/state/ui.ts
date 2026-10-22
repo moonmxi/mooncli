@@ -14,7 +14,7 @@ export interface MenuItem {
 
 export type MenuEntry = MenuItem | "separator";
 
-export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "agent" | "keys" | "data";
+export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "agent" | "keys" | "data" | "about";
 
 interface UiState {
   copyToast: { id: number; x: number; y: number; lines: number; chars: number } | null;
@@ -35,7 +35,7 @@ interface UiState {
   /** 哪个终端开着查找框 */
   findId: string | null;
   setFind(id: string | null): void;
-  /** 用户点状态栏暂时收起了浮动的用量小窗 */
+  /** 用户点状态栏暂时收起了浮动的额度卡片 */
   agentHidden: boolean;
   toggleAgentHidden(): void;
   showCopyToast(x: number, y: number, text: string): void;

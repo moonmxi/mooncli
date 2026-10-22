@@ -139,3 +139,16 @@ describe("分屏", () => {
     expect(s().tabs).toEqual([]);
   });
 });
+
+describe("拖动排序", () => {
+  it("往下拖放在目标后面，往上拖放在目标前面，不跨置顶分界", () => {
+    for (const id of ["a", "b", "c"]) s().addTab(id);
+    s().moveTab("a", "c");
+    expect(s().tabs.map((t) => t.id)).toEqual(["b", "c", "a"]);
+    s().moveTab("a", "b");
+    expect(s().tabs.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    s().togglePin("a");
+    s().moveTab("c", "a");
+    expect(s().tabs.map((t) => t.id)).toEqual(["a", "b", "c"]);
+  });
+});

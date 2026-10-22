@@ -1,15 +1,16 @@
-//! Agent 用量小窗的主进程侧（docs/07）：采集命令、实时额度缓存、bridge 位置、一键接入/断开。
-//! 采集与配置合并的纯逻辑在 mooncli-agent 里，这里负责路径、备份和落盘。
+//! Agent 的主进程侧（docs/07）：额度与当前会话的采集、实时额度缓存、完成提醒、bridge 位置、一键接入/断开。
+//! 采集、提醒与配置合并的纯逻辑在 mooncli-agent 里，这里负责路径、备份、落盘和弹通知。
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use mooncli_agent::integrate;
-use mooncli_agent::{AccountUsage, CollectOptions, Sources, UsageReport, now_epoch};
-use serde::Serialize;
+use mooncli_agent::notify;
+use mooncli_agent::{AccountUsage, AgentKind, CollectOptions, CurrentSession, Focus, now_epoch};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 use crate::AppState;
 use crate::files;
@@ -37,35 +38,43 @@ struct LiveCache {
     pruned_at: i64,
 }
 
-/// mooncli 的 agent 数据目录：data/agent（bridge 的 spool 与 bridge-config 在这里）。
+/// mooncli 的 agent 数据目录：data/agent（bridge 的 spool、提醒与 bridge-config 在这里）。
 /// bridge 在 mooncli 外面被调用时也按同一个约定找到这里（见 mooncli-bridge 的 default_agent_dir）。
 pub fn agent_dir(state: &AppState) -> PathBuf {
     state.data.data_dir.join("agent")
 }
 
+/// 界面告诉后端：当前标签页里正在跑哪个 Agent（没在跑就不传）
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusArg {
+    kind: AgentKind,
+    tab_id: String,
+    cwd: Option<String>,
+    /// Agent 开始运行的时刻（毫秒）
+    since_ms: i64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageResponse {
-    #[serde(flatten)]
-    pub report: UsageReport,
+    pub accounts: Vec<AccountUsage>,
+    pub current: Option<CurrentSession>,
     /// 实时额度最近一次查询失败的原因（成功或没开时为空）
     pub live_error: Option<String>,
+    /// Claude Code 接入了 statusLine 没有（没接入就拿不到它的额度，卡片上给出提示）
+    pub claude_integrated: bool,
 }
 
-/// 采集当前用量。功能没开时返回空报告，界面据此不显示小窗。
-/// 顺手在后台刷新实时额度（到点了才刷），本次先用缓存，下一轮轮询就能拿到新的。
+/// 采集两个 Agent 的额度，以及当前标签页里正在跑的那个会话的上下文。
+/// 顺手在后台刷新 Codex 实时额度（到点了才刷），本次先用缓存，下一轮轮询就能拿到新的。
 #[tauri::command]
-pub fn agent_usage(state: State<'_, AppState>) -> UsageResponse {
+pub fn agent_usage(state: State<'_, AppState>, focus: Option<FocusArg>) -> UsageResponse {
     let settings = state.typed_settings();
-    if !settings.agent.enabled {
-        return UsageResponse { report: UsageReport::default(), live_error: None };
-    }
     let dir = agent_dir(&state);
     if settings.agent.live_quota {
         maybe_refresh_live(&state, settings.agent.codex_path.clone());
     }
-    let mut opts = CollectOptions::defaults(dir.clone());
-    opts.sources = Sources { files: settings.agent.read_session_files, extensions: settings.agent.receive_extensions };
     let (live, live_error) = {
         let mut cache = state.agent.live.lock().unwrap();
         let now = now_epoch();
@@ -75,14 +84,22 @@ pub fn agent_usage(state: State<'_, AppState>) -> UsageResponse {
         }
         if settings.agent.live_quota { (cache.accounts.clone(), cache.last_error.clone()) } else { (Vec::new(), None) }
     };
-    UsageResponse { report: mooncli_agent::collect_all(&opts, &live), live_error }
+    // 标签页记的开始时刻和 Agent 真正写下第一条记录之间可能差一点，放宽几秒
+    let focus = focus.map(|f| Focus { kind: f.kind, tab_id: f.tab_id, cwd: f.cwd, since: f.since_ms / 1000 - 5 });
+    let report = mooncli_agent::collect(&CollectOptions::defaults(dir), &live, focus.as_ref());
+    UsageResponse {
+        accounts: report.accounts,
+        current: report.current,
+        live_error,
+        claude_integrated: claude_integrated(),
+    }
 }
 
-/// 立刻重新查一次实时额度（小窗上的「刷新」）。查完才返回。
+/// 立刻重新查一次实时额度（卡片上的「刷新」）。查完才返回。
 #[tauri::command]
 pub async fn agent_refresh_live(state: State<'_, AppState>) -> Result<(), String> {
     let settings = state.typed_settings();
-    if !settings.agent.enabled || !settings.agent.live_quota {
+    if !settings.agent.live_quota {
         return Err("实时额度没有开启".into());
     }
     let exe = mooncli_agent::codex_live::find_codex_exe(settings.agent.codex_path.as_deref())
@@ -139,6 +156,76 @@ fn maybe_refresh_live(state: &AppState, codex_path: Option<String>) {
         let result = mooncli_agent::codex_live::fetch(&exe, Duration::from_secs(20));
         let _ = store_live(&agent, result);
     });
+}
+
+// ---- 完成提醒 ------------------------------------------------------------------
+
+/// 启动时准备好通知：登记通知身份（名字 + 图标），把提醒偏好写给 bridge，
+/// 再起一个线程收 bridge 交来的提醒（Agent 跑在 mooncli 标签页里时），交给界面决定弹不弹。
+pub fn start_alerts(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let dir = agent_dir(&state);
+    let _ = std::fs::create_dir_all(&dir);
+    let icon = dir.join("mooncli.png");
+    let png: &[u8] = include_bytes!("../icons/128x128.png");
+    if std::fs::metadata(&icon).map(|m| m.len() != png.len() as u64).unwrap_or(true) {
+        let _ = std::fs::write(&icon, png);
+    }
+    if let Err(e) = notify::register_app_id(Some(&icon)) {
+        crate::logs::append(&state.data.data_dir, "error", &e);
+    }
+    sync_notify_prefs(&state);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let state = app.state::<AppState>();
+            let alerts = notify::take_alerts(&agent_dir(&state));
+            if alerts.is_empty() || !state.typed_settings().agent.notify.enabled {
+                continue;
+            }
+            for alert in alerts {
+                let _ = app.emit_to("main", "agent-alert", alert);
+            }
+        }
+    });
+}
+
+/// 把提醒偏好写进 bridge-config：bridge 在 mooncli 外面运行时照着它决定弹不弹。
+pub fn sync_notify_prefs(state: &AppState) {
+    let prefs = state.typed_settings().agent.notify;
+    let mut cfg = read_bridge_config(state);
+    let want = json!({ "enabled": prefs.enabled, "quietWhenFocused": prefs.quiet_when_focused });
+    if cfg.get("notify") != Some(&want) {
+        cfg["notify"] = want;
+        let _ = write_bridge_config(state, &cfg);
+    }
+}
+
+/// 弹一条系统通知。带 tab_id 时，点通知会把 mooncli 拉到前面并切到那个标签页。
+#[tauri::command]
+pub fn notify_toast(app: tauri::AppHandle, title: String, body: String, tab_id: Option<String>) -> Result<(), String> {
+    let handle = app.clone();
+    let on_click: Box<dyn Fn() + Send> = Box::new(move || {
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        if let Some(id) = &tab_id {
+            let _ = handle.emit_to("main", "toast-activated", id.clone());
+        }
+    });
+    notify::show_toast(&title, &body, Some(on_click))
+}
+
+// ---- bridge 与一键接入 -----------------------------------------------------------
+
+fn claude_integrated() -> bool {
+    read_text(&claude_settings_path())
+        .ok()
+        .flatten()
+        .and_then(|t| parse_claude_settings(Some(&t)).ok())
+        .is_some_and(|v| integrate::claude_is_integrated(&v))
 }
 
 /// mooncli-bridge 的完整路径（和主程序放在一起发布）。一键接入时写进 Agent 的配置。
@@ -250,13 +337,8 @@ fn claude_json_text(v: &Value) -> String {
 #[tauri::command]
 pub fn agent_integration_status() -> IntegrationStatus {
     let codex = read_text(&codex_config_path()).ok().flatten().is_some_and(|t| integrate::codex_is_integrated(&t));
-    let claude = read_text(&claude_settings_path())
-        .ok()
-        .flatten()
-        .and_then(|t| parse_claude_settings(Some(&t)).ok())
-        .is_some_and(|v| integrate::claude_is_integrated(&v));
     IntegrationStatus {
-        claude,
+        claude: claude_integrated(),
         codex,
         claude_settings_path: claude_settings_path().display().to_string(),
         codex_config_path: codex_config_path().display().to_string(),
@@ -399,11 +481,10 @@ pub fn agent_integration_apply(
     Ok(IntegrationOutcome { changes: p.changes })
 }
 
-/// 小窗形态之一「独立小窗」：一个置顶的小窗口，只显示用量卡片（docs/07 第 5 节）。
+/// 独立置顶小窗：只显示额度卡片（docs/07 第 5 节）。
 /// 必须是 async 命令：Windows 上在同步命令里建窗口会让新窗口的 WebView 卡死（白屏）。
 #[tauri::command]
 pub async fn agent_window_toggle(app: tauri::AppHandle, open: bool) -> Result<(), String> {
-    use tauri::Manager;
     if let Some(w) = app.get_webview_window("agent") {
         if open {
             let _ = w.show();
@@ -419,7 +500,7 @@ pub async fn agent_window_toggle(app: tauri::AppHandle, open: bool) -> Result<()
     // 用初始化脚本告诉界面这是小窗（WebviewUrl::App 不保留查询参数）
     tauri::WebviewWindowBuilder::new(&app, "agent", tauri::WebviewUrl::App("index.html".into()))
         .initialization_script("window.__MOONCLI_VIEW = 'agent';")
-        .title("mooncli · Agent 用量")
+        .title("mooncli · Agent 额度")
         .inner_size(320.0, 230.0)
         .min_inner_size(260.0, 140.0)
         .always_on_top(true)

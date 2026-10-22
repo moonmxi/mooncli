@@ -23,10 +23,10 @@ fn is_bridge_command(cmd: &str, sub: &str) -> bool {
     cmd.contains("mooncli-bridge") && cmd.trim_end().ends_with(sub)
 }
 
-/// 要接入的 hook 事件：在跑（提交提示词、工具跑完）、等你（要权限、空闲提醒）、一轮结束、会话起止。
-/// PreToolUse 不接：每次调工具前都触发，PostToolUse 已经够用。
-pub const HOOK_EVENTS: [&str; 7] =
-    ["SessionStart", "UserPromptSubmit", "PermissionRequest", "Notification", "PostToolUse", "Stop", "SessionEnd"];
+/// 要接入的 hook 事件：只要三个——提交提示词（记下会话属于哪个标签页、转录在哪）、
+/// 需要你确认（Notification）、一轮结束（Stop）。后两个发完成提醒。
+/// 工具调用前后的事件不接：触发太频繁，提醒和上下文都用不上。
+pub const HOOK_EVENTS: [&str; 3] = ["UserPromptSubmit", "Notification", "Stop"];
 
 fn entry_is_bridge(e: &Value) -> bool {
     e.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
@@ -103,6 +103,23 @@ pub fn claude_integrate(settings: &Value, bridge_path: &str) -> Result<ClaudeOut
             }
         }
     }
+    // 早先的版本接过更多事件，顺手把那些多余的 bridge 条目清掉
+    let mut emptied = Vec::new();
+    for (event, list) in hooks_obj.iter_mut() {
+        if HOOK_EVENTS.contains(&event.as_str()) {
+            continue;
+        }
+        if let Some(arr) = list.as_array_mut() {
+            let before = arr.len();
+            arr.retain(|e| !entry_is_bridge(e));
+            if arr.is_empty() && before > 0 {
+                emptied.push(event.clone());
+            }
+        }
+    }
+    for event in emptied {
+        hooks_obj.remove(&event);
+    }
     if appended.is_empty() {
         changes.push("hooks 已经接入，不变".into());
     } else {
@@ -140,13 +157,15 @@ pub fn claude_unintegrate(
     }
     let mut removed = false;
     if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
-        for event in HOOK_EVENTS {
-            if let Some(list) = hooks.get_mut(event).and_then(Value::as_array_mut) {
+        // 所有事件都看一遍：早先的版本接过更多事件
+        let events: Vec<String> = hooks.keys().cloned().collect();
+        for event in events {
+            if let Some(list) = hooks.get_mut(&event).and_then(Value::as_array_mut) {
                 let before = list.len();
                 list.retain(|e| !entry_is_bridge(e));
                 removed |= list.len() != before;
-                if list.is_empty() && created_events.iter().any(|c| c == event) {
-                    hooks.remove(event);
+                if list.is_empty() && created_events.contains(&event) {
+                    hooks.remove(&event);
                 }
             }
         }

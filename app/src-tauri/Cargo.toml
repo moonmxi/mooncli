@@ -24,7 +24,6 @@ mooncli-pty.workspace = true
 mooncli-agent.workspace = true
 arboard = { version = "3", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-tauri-plugin-notification = "2"
 tauri-plugin-window-state = "2"
 
 

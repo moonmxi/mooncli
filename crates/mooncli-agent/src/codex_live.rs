@@ -76,7 +76,6 @@ fn window(v: &Value) -> Option<RateWindow> {
         used_percent: used,
         window_minutes: v.get("windowDurationMins").and_then(Value::as_i64),
         resets_at: v.get("resetsAt").and_then(Value::as_i64),
-        estimated: false,
     })
 }
 
@@ -87,19 +86,14 @@ pub fn parse_rate_limits(result: &Value, now: i64) -> Option<AccountUsage> {
         .and_then(|m| m.get("codex"))
         .filter(|v| v.is_object())
         .or_else(|| result.get("rateLimits"))?;
-    let primary = snap.get("primary").and_then(window);
-    let secondary = snap.get("secondary").and_then(window);
-    if primary.is_none() && secondary.is_none() {
-        return None;
-    }
-    Some(AccountUsage {
-        kind: AgentKind::Codex,
-        primary,
-        secondary,
-        plan: snap.get("planType").and_then(Value::as_str).filter(|p| *p != "unknown").map(str::to_string),
-        updated_at: now,
-        source: SnapshotSource::Live,
-    })
+    AccountUsage::from_windows(
+        AgentKind::Codex,
+        snap.get("primary").and_then(window),
+        snap.get("secondary").and_then(window),
+        snap.get("planType").and_then(Value::as_str).filter(|p| *p != "unknown").map(str::to_string),
+        now,
+        SnapshotSource::Live,
+    )
 }
 
 /// 起一个 `codex app-server`，握手后读一次额度就关掉。拿不到（没装、没登录、API key 登录
@@ -178,8 +172,8 @@ mod tests {
         let a = parse_rate_limits(&result, 100).unwrap();
         assert_eq!(a.kind, AgentKind::Codex);
         assert_eq!(a.source, SnapshotSource::Live);
-        assert_eq!(a.primary.as_ref().unwrap().used_percent, 3.0);
-        assert_eq!(a.secondary.as_ref().unwrap().window_minutes, Some(10080));
+        assert_eq!(a.five_hour.as_ref().unwrap().used_percent, 3.0);
+        assert_eq!(a.seven_day.as_ref().unwrap().window_minutes, Some(10080));
         assert_eq!(a.plan.as_deref(), Some("plus"));
         assert_eq!(a.updated_at, 100);
     }
@@ -188,7 +182,8 @@ mod tests {
     fn falls_back_to_single_bucket_and_rejects_empty() {
         let result = json!({ "rateLimits": { "secondary": { "usedPercent": 40, "windowDurationMins": 10080 }, "planType": "unknown" } });
         let a = parse_rate_limits(&result, 1).unwrap();
-        assert!(a.primary.is_none());
+        assert!(a.five_hour.is_none());
+        assert_eq!(a.seven_day.unwrap().used_percent, 40.0);
         assert!(a.plan.is_none());
         assert!(parse_rate_limits(&json!({ "rateLimits": { "primary": null } }), 1).is_none());
     }
