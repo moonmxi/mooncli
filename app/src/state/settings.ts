@@ -49,6 +49,20 @@ export interface AppSettings {
   history: { enabled: boolean; ignorePatterns: string[]; importPsreadline: boolean; keepDays: number };
   /** 除了内置的 ssh、mosh、wsl……之外，也当作"连接服务器"的命令（写法和 ssh 一样，比如自己的别名） */
   remote: { connectCommands: string[] };
+  /** Agent 用量小窗（docs/07）：默认关闭；widget 部分只界面用，开关部分 Rust 也读 */
+  agent: {
+    enabled: boolean;
+    readSessionFiles: boolean;
+    receiveStatusline: boolean;
+    receiveHooks: boolean;
+    widget: {
+      anchor: "bottom-right" | "bottom-left" | "top-right" | "top-left";
+      opacity: number;
+      /** 进度条变警告色 / 危险色的阈值（0–1） */
+      warnAt: number;
+      dangerAt: number;
+    };
+  };
   /** 改过的快捷键（shortcuts.ts 的 Keymap） */
   keys: Keymap;
 }
@@ -89,6 +103,13 @@ export const DEFAULTS: AppSettings = {
   shell: { path: null, args: [], integration: true, useBundledConpty: true, adaptColors: true },
   history: { enabled: true, ignorePatterns: [], importPsreadline: true, keepDays: 0 },
   remote: { connectCommands: [] },
+  agent: {
+    enabled: false,
+    readSessionFiles: true,
+    receiveStatusline: true,
+    receiveHooks: true,
+    widget: { anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
+  },
   keys: {},
 };
 

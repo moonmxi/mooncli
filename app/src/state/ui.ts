@@ -14,7 +14,7 @@ export interface MenuItem {
 
 export type MenuEntry = MenuItem | "separator";
 
-export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "keys" | "data";
+export type SettingsSection = "appearance" | "font" | "terminal" | "tabs" | "shell" | "agent" | "keys" | "data";
 
 interface UiState {
   copyToast: { id: number; x: number; y: number; lines: number; chars: number } | null;

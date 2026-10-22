@@ -10,9 +10,12 @@ import type {
   HistoryHit,
   HostCount,
   ImportSummary,
+  IntegrationOutcome,
+  IntegrationStatus,
   SessionMsg,
   SessionStats,
   ShellStatus,
+  UsageReport,
 } from "./types";
 
 const log = (what: string) => (e: unknown) => console.error(`mooncli: ${what}失败`, e);
@@ -47,6 +50,11 @@ export function tauriBackend(): Backend {
     dataReveal: (target) => invoke("data_reveal", { target }),
     historyPrune: (days) => invoke<number>("history_prune", { days }),
     sessionStats: (id) => invoke<SessionStats>("session_stats", { id }),
+    agentUsage: () => invoke<UsageReport>("agent_usage"),
+    agentBridgePath: () => invoke<string>("agent_bridge_path"),
+    agentIntegrationStatus: () => invoke<IntegrationStatus>("agent_integration_status"),
+    agentIntegrationPreview: (target, action) => invoke<IntegrationOutcome>("agent_integration_preview", { target, action }),
+    agentIntegrationApply: (target, action) => invoke<IntegrationOutcome>("agent_integration_apply", { target, action }),
     historySearch: (text, opts) =>
       invoke<HistoryHit[]>("history_search", {
         query: { text, nowMs: Date.now(), cwd: opts?.cwd ?? null, limit: opts?.limit ?? 50 },

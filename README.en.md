@@ -27,6 +27,10 @@ _Tabs adopt the titles and icons of agent sessions, and flag you when an agent i
 
 ![Night Voyage: the one dark theme](docs/images/theme-dark.png)
 
+![Agent usage widget: follows the active tab, showing context usage and the 5-hour / weekly quotas](docs/images/agent-widget.png)
+
+_The agent usage widget is opt-in (off by default). It only reads files Claude Code / Codex write locally plus their official extension points — never any credentials._
+
 _Screenshots were captured in the browser demo mode (mock shell). The desktop app has the same UI with a real pwsh._
 
 ## Features
@@ -39,12 +43,12 @@ _Screenshots were captured in the browser demo mode (mock shell). The desktop ap
 - **Content-aware tabs**: the tab bar sits on the left or the top; tabs show the directory and the running program, adopt the titles and icons set by Claude Code / Codex sessions, and flag you when an agent is waiting for confirmation.
 - **Fully customizable shortcuts**: record your own bindings, with conflict detection and two presets. `Ctrl+Shift+P` opens the command palette.
 - **Your data stays yours**: daily automatic backups with restore, plus full export/import. If PowerShell 7 is missing, you get install guidance instead of a silent fallback to 5.1.
+- **Agent usage widget** (coming in the next release; opt-in, off by default): a floating card that follows the active tab and shows Claude Code / Codex context usage, 5-hour and weekly quotas, and session state (running / waiting for you). Data comes only from official extension points (statusLine, hooks, notify) and the session files the tools write locally — no credentials are read and no network requests are made. One-click connect/disconnect in Settings, with automatic backups before any config change.
 
 ### In progress
 
 - Window materials (Mica / acrylic), a theme editor, palette import
 - A completion panel and a persistent candidate panel
-- An agent usage widget: live Claude Code / Codex 5-hour and weekly quotas, plus context usage
 - Process-tree recognition
 
 Progress is tracked in [docs/09](docs/09-roadmap.md) (Chinese).

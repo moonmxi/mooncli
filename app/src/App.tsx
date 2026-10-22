@@ -3,6 +3,7 @@ import { pickBackend } from "./backend";
 import { Backdrop, useBackgroundUrl, useRenderSize } from "./components/Backdrop";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { AgentWidget } from "./components/AgentWidget";
 import { ContextMenu } from "./components/ContextMenu";
 import { CopyToast, Notice } from "./components/CopyToast";
 import { SettingsPage } from "./components/settings/SettingsPage";
@@ -371,6 +372,7 @@ export function App() {
         ))}
       </main>
       <StatusBar tab={activeTab} bp={layout.bp} size={size} backendKind={backend.kind} zoom={settings.zoom} />
+      <AgentWidget backend={backend} />
       <SettingsPage backend={backend} systemDark={systemDark} />
       <CommandPalette commands={commands} backend={backend} />
       <HistoryPanel backend={backend} onNewTab={newTab} />

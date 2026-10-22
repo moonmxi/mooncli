@@ -25,6 +25,7 @@ mooncli-protocol = { path = "crates/mooncli-protocol" }
 mooncli-history = { path = "crates/mooncli-history" }
 mooncli-config = { path = "crates/mooncli-config" }
 mooncli-pty = { path = "crates/mooncli-pty" }
+mooncli-agent = { path = "crates/mooncli-agent" }
 
 [profile.release]
 lto = true

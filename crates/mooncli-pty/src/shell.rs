@@ -141,6 +141,8 @@ pub struct LaunchRequest<'a> {
     /// 让 PSReadLine 的配色跟随主题（集成脚本里只替换仍是默认值的颜色）
     pub adapt_colors: bool,
     pub session_id: &'a str,
+    /// Agent 功能开启时给 shell 注入 MOONCLI_AGENT_DIR（bridge 往这里写 spool）；None 不注入
+    pub agent_dir: Option<&'a str>,
     pub cwd: Option<String>,
     pub cols: u16,
     pub rows: u16,
@@ -200,6 +202,9 @@ pub fn launch(req: LaunchRequest) -> SpawnOptions {
     }
     if integrate && req.adapt_colors {
         env.push(("MOONCLI_ADAPT_COLORS".into(), "1".into()));
+    }
+    if let Some(dir) = req.agent_dir {
+        env.push(("MOONCLI_AGENT_DIR".into(), dir.to_string()));
     }
     SpawnOptions {
         program: req.shell.program.display().to_string(),
@@ -263,6 +268,7 @@ mod tests {
             integration: true,
             adapt_colors: true,
             session_id: "tab-1",
+            agent_dir: None,
             cwd: None,
             cols: 120,
             rows: 32,
@@ -286,6 +292,7 @@ mod tests {
             integration: true,
             adapt_colors: true,
             session_id: "t",
+            agent_dir: None,
             cwd: None,
             cols: 80,
             rows: 24,

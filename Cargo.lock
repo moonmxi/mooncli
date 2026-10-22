@@ -1945,6 +1945,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "mooncli-agent",
  "mooncli-config",
  "mooncli-history",
  "mooncli-protocol",
@@ -1955,6 +1956,16 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "zip",
+]
+
+[[package]]
+name = "mooncli-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

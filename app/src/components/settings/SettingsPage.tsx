@@ -1,7 +1,7 @@
 // 设置页：外观、字体与缩放、终端、标签栏、Shell 与诊断、快捷键、数据与备份。改动立即生效并自动保存。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { bytesToBase64 } from "../../backend/base64";
-import type { Backend, Diagnostics, SessionStats } from "../../backend/types";
+import type { Backend, Diagnostics, IntegrationAction, IntegrationStatus, IntegrationTarget, SessionStats } from "../../backend/types";
 import { SIDEBAR } from "../../layout/layout";
 import {
   DEFAULTS,
@@ -40,6 +40,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: string }[] = [
   { id: "terminal", label: "终端", icon: "pwsh" },
   { id: "tabs", label: "标签栏", icon: "layout" },
   { id: "shell", label: "Shell 与诊断", icon: "info" },
+  { id: "agent", label: "Agent 用量", icon: "gauge" },
   { id: "keys", label: "快捷键", icon: "keyboard" },
   { id: "data", label: "数据与备份", icon: "folder" },
 ];
@@ -113,6 +114,7 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
           {section === "terminal" && <TerminalSection s={settings} update={update} reset={reset} />}
           {section === "tabs" && <TabsSection s={settings} update={update} reset={reset} />}
           {section === "shell" && <ShellSection s={settings} update={update} backend={backend} />}
+          {section === "agent" && <AgentSection s={settings} update={update} backend={backend} />}
           {section === "keys" && <KeysSection />}
           {section === "data" && <DataSection backend={backend} />}
           </div>
@@ -482,6 +484,163 @@ function TabsSection({ s, update, reset }: { s: AppSettings; update: Update; res
       <Row label="窗口变窄时自动收起侧栏" desc="窗口宽度不够时先收起侧栏，保证终端至少 80 列">
         <Toggle label="自动收起侧栏" value={s.tabs.sidebar.autoCollapse} onChange={(v) => update((d) => (d.tabs.sidebar.autoCollapse = v))} />
       </Row>
+    </Group>
+  );
+}
+
+// ---- Agent 用量 ----
+
+function AgentSection({ s, update, backend }: { s: AppSettings; update: Update; backend: Backend }) {
+  const [bridgePath, setBridgePath] = useState("");
+  useEffect(() => {
+    backend.agentBridgePath().then(setBridgePath).catch(() => {});
+  }, [backend]);
+  const a = s.agent;
+  return (
+    <>
+      <Group title="用量小窗">
+        <Row
+          label="显示 Agent 用量小窗"
+          desc="在窗口角落浮动显示 Claude Code / Codex 的上下文占用和账号额度（5 小时、周）。数据只来自它们官方扩展点送来的内容和它们自己写在本机的会话文件——不读任何登录凭证，不发网络请求（docs/07）。"
+        >
+          <Toggle label="Agent 用量小窗" value={a.enabled} onChange={(v) => update((d) => (d.agent.enabled = v))} />
+        </Row>
+      </Group>
+      <Group title="数据来源">
+        <Row label="读取会话文件" desc="读 Claude Code 的会话转录和 Codex 的 rollout 文件：上下文占用、Codex 的额度快照、Claude 的用量估算都从这里来。只读，不改。">
+          <Toggle label="读取会话文件" value={a.readSessionFiles} onChange={(v) => update((d) => (d.agent.readSessionFiles = v))} />
+        </Row>
+        <Row label="接收 statusLine 数据" desc="接入 Claude Code 的 statusLine 后（见下方），每次刷新都会把当前会话信息送给 mooncli：模型、上下文、花费，支持时还有官方额度百分比。">
+          <Toggle label="接收 statusLine 数据" value={a.receiveStatusline} onChange={(v) => update((d) => (d.agent.receiveStatusline = v))} />
+        </Row>
+        <Row label="接收 hooks 状态" desc="接入 hooks 后，小窗能显示 Agent 是在运行、等你确认还是本轮已完成。">
+          <Toggle label="接收 hooks 状态" value={a.receiveHooks} onChange={(v) => update((d) => (d.agent.receiveHooks = v))} />
+        </Row>
+      </Group>
+      <Group title="小窗外观">
+        <Row label="停靠角落">
+          <Segmented
+            label="小窗停靠角落"
+            value={a.widget.anchor}
+            options={[
+              { value: "bottom-right", label: "右下" },
+              { value: "bottom-left", label: "左下" },
+              { value: "top-right", label: "右上" },
+              { value: "top-left", label: "左上" },
+            ]}
+            onChange={(v) => update((d) => (d.agent.widget.anchor = v))}
+          />
+        </Row>
+        <Row label="不透明度">
+          <Stepper label="小窗不透明度" value={Math.round(a.widget.opacity * 100)} min={50} max={100} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.opacity = v / 100))} />
+        </Row>
+        <Row label="警告阈值" desc="用量达到这个比例时进度条变警告色">
+          <Stepper label="警告阈值" value={Math.round(a.widget.warnAt * 100)} min={50} max={90} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.warnAt = v / 100))} />
+        </Row>
+        <Row label="危险阈值" desc="用量达到这个比例时进度条变危险色、数字加粗">
+          <Stepper label="危险阈值" value={Math.round(a.widget.dangerAt * 100)} min={80} max={99} step={1} unit="%" onChange={(v) => update((d) => (d.agent.widget.dangerAt = v / 100))} />
+        </Row>
+      </Group>
+      <IntegrationGroup backend={backend} bridgePath={bridgePath} />
+    </>
+  );
+}
+
+function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePath: string }) {
+  const [status, setStatus] = useState<IntegrationStatus | null>(null);
+  const [pending, setPending] = useState<{ target: IntegrationTarget; action: IntegrationAction; changes: string[] } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () => {
+    backend.agentIntegrationStatus().then(setStatus).catch(() => {});
+  };
+  useEffect(refresh, [backend]);
+
+  const preview = (target: IntegrationTarget, action: IntegrationAction) => {
+    setNote(null);
+    backend
+      .agentIntegrationPreview(target, action)
+      .then((o) => setPending({ target, action, changes: o.changes }))
+      .catch((e) => setNote(`预览失败：${String(e)}`));
+  };
+  const apply = () => {
+    if (!pending) return;
+    setBusy(true);
+    backend
+      .agentIntegrationApply(pending.target, pending.action)
+      .then((o) => {
+        setNote(`已写入（原文件已自动备份）：${o.changes.join("；")}`);
+        setPending(null);
+        refresh();
+      })
+      .catch((e) => setNote(`写入失败：${String(e)}`))
+      .finally(() => setBusy(false));
+  };
+
+  const targetRow = (target: IntegrationTarget, label: string, integrated: boolean | undefined, path: string, desc: string) => (
+    <Row
+      label={label}
+      desc={
+        <>
+          {desc}
+          <br />
+          配置文件：<code>{path}</code> · 状态：{integrated === undefined ? "读取中" : integrated ? "已接入" : "未接入"}
+        </>
+      }
+    >
+      <button type="button" className="btn" disabled={integrated === undefined || busy} onClick={() => preview(target, integrated ? "unintegrate" : "integrate")}>
+        {integrated ? "断开" : "接入"}
+      </button>
+    </Row>
+  );
+
+  return (
+    <Group title="接入（让数据更实时）">
+      <Row
+        label="说明"
+        desc={
+          <>
+            不接入也能用（只读会话文件）。接入是把官方扩展点指向 mooncli-bridge
+            {bridgePath ? (
+              <>
+                （<code>{bridgePath}</code>）
+              </>
+            ) : null}
+            ：你原来的 statusLine / notify 会被保存并由 bridge 原样转调，显示和行为不变；每次写入前自动备份原文件，断开时精确恢复。
+          </>
+        }
+      >
+        <span />
+      </Row>
+      {targetRow("claude", "Claude Code", status?.claude, status?.claudeSettingsPath ?? "~/.claude/settings.json", "statusLine + hooks：会话状态（等确认/已完成）和官方额度实时进来。")}
+      {targetRow("codex", "Codex", status?.codex, status?.codexConfigPath ?? "~/.codex/config.toml", "notify：一轮结束时触发小窗刷新（用量仍读会话文件，notify 本身不带用量）。")}
+      {pending && (
+        <Row
+          label={pending.action === "integrate" ? "确认接入" : "确认断开"}
+          desc={
+            <ul style={{ margin: 0, paddingLeft: 16 }}>
+              {pending.changes.map((ch) => (
+                <li key={ch}>{ch}</li>
+              ))}
+            </ul>
+          }
+        >
+          <span style={{ display: "inline-flex", gap: 8 }}>
+            <button type="button" className="btn primary" disabled={busy} onClick={apply}>
+              确认写入
+            </button>
+            <button type="button" className="btn" disabled={busy} onClick={() => setPending(null)}>
+              取消
+            </button>
+          </span>
+        </Row>
+      )}
+      {note && (
+        <Row label="结果" desc={note}>
+          <span />
+        </Row>
+      )}
     </Group>
   );
 }
