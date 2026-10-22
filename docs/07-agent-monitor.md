@@ -1,92 +1,122 @@
-# 07 · Agent 用量小窗（Codex）
+# 07 · Agent 额度与完成提醒（Claude Code、Codex）
 
-在 mooncli 里直接看 Codex 的用量：当前会话的上下文占用、账号的 5 小时 / 周额度还剩多少、这一轮跑完没有。不用切窗口，不用敲 `/status`。
+在 mooncli 里直接看 Claude Code 和 Codex 的账号额度：5 小时、7 天两个窗口各用了多少、多久后重置。当前标签页正在跑其中一个时，再显示这个会话的上下文占用。一轮跑完或要你确认时，右下角弹系统通知，点一下回到那个标签页。
 
-> 范围说明：本功能只做 Codex。Claude Code 的同类数据（statusLine `rate_limits` 等）前期调研过，结论存档在本文附录；产品决定先不做，v0.1.1 起代码里只保留 Codex 一条线。
+## 1. 合规边界
 
-## 1. 合规边界（先说死）
+只用三类数据：
 
-只用两类数据：
+1. **官方扩展点**送来的内容：Claude Code 的 statusLine 与 hooks、Codex 的 notify；
+2. **官方客户端自己的接口**：`codex app-server` 的 `account/rateLimits/read`（Codex 的 IDE 插件用的就是它，登录和联网都由用户本机的 Codex 完成）；
+3. **两者自己写在本机的文件**：Claude Code 的会话转录、Codex 的 rollout 文件。
 
-1. **Codex 官方扩展点**（notify）送来的内容；
-2. **Codex 自己写在本机的文件**（会话 rollout 文件）。
+不读任何登录凭证（`~/.codex/auth.json`、Claude Code 的 OAuth 令牌都不碰），mooncli 自己不发网络请求。市面上有些工具读 OAuth 凭证去调 `chatgpt.com/backend-api/wham/usage`、`api.anthropic.com/api/oauth/usage` 这类未公开接口，这类做法一律不用。
 
-不读任何登录凭证（`~/.codex/auth.json` 碰都不碰）、不调任何未公开网络接口、不注入不拦截。市面上能显示「精确百分比」的第三方工具分两类：一类和我们一样读本地文件；另一类读 OAuth 凭证去调 `chatgpt.com/backend-api/wham/usage` 这类未公开接口——后者一律不做。好在 Codex 的额度快照本来就落盘在会话文件里（见第 2 节），纯本地就能拿到真实百分比，不需要碰红线。
+## 2. 额度
 
-## 2. 数据来源
+| | Claude Code | Codex |
+| --- | --- | --- |
+| 来源 | statusLine 输入里的 `rate_limits.five_hour` / `seven_day`（`used_percentage`、`resets_at`） | `codex app-server` 的 `account/rateLimits/read`；退路是 rollout 文件里 `token_count` 事件带的 `rate_limits` |
+| 新鲜度 | Claude Code 每次刷新状态栏都会送来（每轮回复后） | 每两分钟查一次，卡片上可以手动刷新；查一次约 4 秒（起一个 Codex 进程） |
+| 前提 | 接入 statusLine（第 5 节）；只有 Pro / Max 订阅、第一次 API 响应之后才有 | 本机装了并登录 Codex；API key 登录没有额度窗口 |
 
-| 数据 | 来源 |
+- 额度是账号级的，取所有会话里最新的一份。
+- 窗口按长度认（300 分钟 = 5 小时，10080 分钟 = 7 天），不按套餐写死：Codex Pro 没有 5 小时窗口，缺的窗口显示「–」。
+- 百分比一律用官方给的值，不用 token 数反推。
+- 窗口过了重置时刻还没有新数据时按 0% 显示（官方在窗口过期后也不再下发旧值）。
+- 数据超过 10 分钟没更新时，在卡片上标出数据的时刻。
+
+## 3. 当前会话的上下文
+
+只为**当前标签页正在运行的那一个** Agent 找上下文，其它会话一概不看；当前标签页没在跑 Claude Code / Codex 时不显示上下文。界面把「哪个 Agent、哪个标签页、目录、开始运行的时刻」交给后端，后端只看这次运行以来写下的记录。
+
+| | 依次尝试 |
 | --- | --- |
-| 模型 | 会话文件里 `turn_context` 的 `model` |
-| 上下文占用 | `token_count` 事件的 `info.last_token_usage.input_tokens` ÷ `info.model_context_window` |
-| 5 小时额度 | `token_count` 事件带的 `rate_limits.primary`（已用百分比、窗口长度、重置时间） |
-| 周额度 | `rate_limits.secondary` |
-| 套餐 | `rate_limits.plan_type`（如 plus / pro） |
-| 状态（本轮已完成） | notify 的 `agent-turn-complete` 事件（见第 4 节） |
+| Claude Code | ① 这个标签页送来的 statusLine：`context_window.current_usage` 的输入侧之和、`context_window_size`（上限的权威值）、`used_percentage`；② hooks 记下的转录路径；③ 按标签页目录找 `~/.claude/projects/<目录名>/` 里这次运行以来写过的转录，读最后一条回复的 `usage`。转录对应的会话送过 statusLine 时，仍用 statusLine 的上限 |
+| Codex | ① 这个标签页的 notify 带来的 `thread-id`，对上 rollout 文件名；② 这次运行以来写过、`cwd` 和标签页一致的最新 rollout。用最后一个 `token_count` 的 `last_token_usage.total_tokens` 和 `model_context_window`，百分比按 Codex 自己的算法扣掉 12000 的固定开销 |
 
-要点（2026-10-22 按 openai/codex 源码核实，细节见附录）：
+注意：statusLine 的 `context_window.total_input_tokens` 是整个会话的累计值，不是当前上下文，不能用。
 
-- rollout 文件在 `~/.codex/sessions/年/月/日/rollout-*.jsonl`，归档在 `archived_sessions/`；每行 `{timestamp, type, payload}`，首行 `session_meta` 带会话 id 与 cwd。`CODEX_HOME` 可改位置（可逗号分隔多个目录，多账号各一个目录时逐个扫、合开展示）。
-- `rate_limits` 是客户端把后端响应头解析后落盘的快照，与官方 `/status` 同源——读文件等于读官方数据。账号级额度取最近更新的那个文件里的快照。
-- 窗口认 `window_minutes` 动态判断（300 = 5 小时，10080 = 一周）：官方调整过窗口构成（Pro 至今没有 5 小时窗口，primary 缺席是常态），任一窗口都可能为 null，不能按套餐写死。周上限的绝对数值官方从未公布，不许用 token 数反推百分比。
-- 会话与标签页的对齐键：文件名尾部 UUID = `session_meta.id` = notify 的 `thread-id`；接入 notify 后能直接关联到 mooncli 的标签页，否则按 cwd 对应，再不行显示最近活动的一个。
-- `.jsonl.zst` 压缩归档暂不支持（v1 跳过，不报错）。
+还没有第一轮回复时显示「第一轮回复后显示上下文占用」。
 
-## 3. mooncli-bridge
+## 4. 完成提醒
 
-Codex 的 notify 指向的小工具，和主程序放一起发布：
+| 事件 | 提醒 |
+| --- | --- |
+| Claude Code `Stop` hook（一轮结束） | 「Claude Code 完成了」，正文：目录 · 最后一条回复的头一句 |
+| Claude Code `Notification` hook，`notification_type` 为 `permission_prompt`、`elicitation_dialog` | 「Claude Code 需要你确认」，正文是 Claude Code 给的提示 |
+| Codex notify `agent-turn-complete` | 「Codex 完成了」，正文：目录 · `last-assistant-message` 的头一句 |
 
-- `mooncli-bridge codex-notify`：读最后一个 argv 的事件 JSON，写进 mooncli 数据目录下的 spool 文件（原子替换写）；用户原来的 notify 若被接入流程保存过，原样转调（不等待）。
-- 铁律：永远立刻以 0 退出、不输出任何东西、错误全吞——绝不能因为 mooncli 的问题影响 Codex 本身。
-- 它靠环境变量找 mooncli：`MOONCLI_AGENT_DIR`（spool 目录）、`MOONCLI_SESSION_ID`（标签页会话 ID）由 mooncli 在启动标签页时注入。
+Claude Code 的空闲提醒（`idle_prompt`，一轮结束后又等了一阵）不再提醒，因为 `Stop` 已经提醒过了。
 
-主进程只读 spool：notify 记录比会话文件新时，把该会话标为「本轮已完成」。notify 已被 Codex 源码标为 legacy（有移除 TODO），所以它只是锦上添花——文件轮询本身是完整兜底，notify 没了功能照常。
+谁来弹：
 
-## 4. 一键接入（notify）
+- **Agent 跑在 mooncli 的标签页里**（bridge 的祖先进程里有 `mooncli.exe`，且有 `MOONCLI_SESSION_ID`）：bridge 把提醒写进 `agent/alerts/`，主程序半秒内取走交给界面。界面按你在不在看决定怎么提醒：
+  - 你正看着这个标签页：不打扰（「正看着时不提醒」可以关）；
+  - 窗口在前台但在看别的标签页：标签上亮点，窗口里出一条提示；
+  - 窗口不在前台：弹系统通知，点一下拉起 mooncli 并切到那个标签页。
+- **跑在别的终端里**（Windows Terminal、VS Code……）：bridge 自己弹系统通知；前台窗口正是运行 Agent 的那个终端时不弹。
 
-设置页里一键完成，随时可断开：
+系统通知用 WinRT 的 ToastNotification（`tauri-winrt-notification`），身份是 `dev.moonmxi.mooncli`：主程序启动时、bridge 弹通知前都会在 `HKCU\Software\Classes\AppUserModelId\dev.moonmxi.mooncli` 登记名字和图标。没有这一步时，开发版、便携版发出的通知会被 Windows 悄悄丢掉。
 
-- 改的是用户级 `~/.codex/config.toml` **顶层**的 `notify`（写在项目级配置里会被 Codex 忽略）；已有 notify 先存进 mooncli 的 bridge-config，bridge 运行时转调。
-- 写入前把原文件备份为同目录下的 `<原名>.mooncli-backup-<时间戳>`；接入前在界面里先预览变更清单，确认才落盘。
-- 断开时精确恢复：notify 恢复原样或整行删除，文件其它部分逐字节不动（合并逻辑是纯函数，有单元测试覆盖接入→断开的往返）。
+## 5. mooncli-bridge 与接入
 
-## 5. 小窗
+官方扩展点都指向和主程序放在一起的 `mooncli-bridge.exe`：
 
-形态：浮动卡片（窗口四角可停靠），跟随当前标签页：
+| 子命令 | 用在哪 | 做什么 |
+| --- | --- | --- |
+| `claude-statusline` | Claude Code 的 statusLine | 把输入写进 spool；用户原来的状态栏命令保存过的话原样转调，否则输出一行「模型 · 上下文 · 5 小时 · 本周」 |
+| `claude-hook` | `UserPromptSubmit`、`Notification`、`Stop` 三个 hooks | 记下会话最近一个事件（只留会话 ID、事件名、目录、转录路径、通知类型和文字）；后两个事件发提醒 |
+| `codex-notify` | Codex 的 `notify` | 记下 `thread-id` 和目录；发提醒；用户原来的 notify 保存过的话原样转调（不等待） |
+| `test-toast` | 命令行排查 | 弹一条测试通知 |
+
+铁律：永远以 0 退出，除 statusLine 那一行外不输出东西，错误全吞——不能因为 mooncli 的问题影响 Claude Code、Codex 本身。实测一次 hook 调用 20–50ms（Claude Code 在 Windows 上经 Git Bash 启动 hook 命令本身要 1–3 秒，和 bridge 无关）。
+
+spool 在 `%LOCALAPPDATA%\dev.moonmxi.mooncli\agent\`：`claude-status-<会话>.json`、`claude-hook-<会话>.json`、`codex-notify-<thread>.json`，每个会话每种来源只留最新一份，7 天没更新的自动清掉。用户的提问和 Agent 的回复不落进这个目录。
+
+**一键接入**（设置 → Agent）：
+
+- Claude Code：改 `~/.claude/settings.json`。原 statusLine 整个对象存进 `bridge-config.json` 由 bridge 转调；hooks 并列追加，不覆盖用户已有的同事件 hooks。
+- Codex：只改用户级 `~/.codex/config.toml` **顶层**的 `notify`（项目级的会被 Codex 忽略）；原 notify 存进 bridge-config 由 bridge 转调。
+- 写入前在界面里预览变更清单，确认才落盘；改前把原文件备份为同目录下的 `<原名>.mooncli-backup-<时间戳>`。
+- 断开时精确恢复：文件没被别人改过就逐字节放回原文；改过的话只删 mooncli 加的部分，其它内容不动（合并逻辑是纯函数，有接入→断开的往返测试）。
+- 不想让 mooncli 改文件，设置页里有「自己手动配置」，给出要写的内容和复制按钮。
+
+## 6. 卡片
 
 ```
-Codex · gpt-5-codex                     [plus]
-上下文   ██████░░░░  34% · 171k/500k
-5 小时   ██░░░░░░░░  27% · 1 小时 42 分
-本周     █░░░░░░░░░   9% · 5 天
-● 本轮已完成
+Agent 额度                                  刷新
+───────────────────────────────────────────────
+Claude Code
+5 小时   ██████░░░░   46%  2 小时 18 分
+7 天     █░░░░░░░░░    6%  4 天
+───────────────────────────────────────────────
+Codex  plus
+5 小时   ░░░░░░░░░░    1%  3 小时 9 分
+7 天     ░░░░░░░░░░    0%  7 天
+───────────────────────────────────────────────
+当前会话 · Claude Code · Opus
+上下文   █░░░░░░░░░   13%  126k/1M
 ```
 
-- 显示当前标签页对应会话的上下文 + 账号的额度窗口；多个会话时可展开「全部 N 个」，点任意一个切到它的标签页。
-- 进度条颜色随设置里的警告 / 危险阈值变；上下文 ≥85% 时提示可以考虑 /compact。
-- 窗口的重置时间已过但还没有新数据时，按「已重置 · 0%」呈现，不显示陈旧百分比（官方在窗口过期后也不再下发旧值，显示旧数会误导）。
-- 数据超过 10 分钟没更新时标出快照时间，说明这是本地文件里最近一次记录。
-- 命令面板、历史面板等浮层打开时小窗让位；在「Agent 用量」设置节里保留，方便调外观时实时预览。
-- 后续形态（未做）：侧栏区块、独立小窗、状态栏一段；浮动卡片的拖动吸附也没做。
+- 形态：浮动卡片（停在窗口一角，按住标题拖到别的角）、状态栏一段（`Claude 46% · 6%   Codex 1% · 0%`，点击收起或展开卡片）、独立置顶小窗（切到别的程序时也能看到；它没有标签页，不显示上下文）。
+- 缺数据时直说原因：Claude Code 没接入、还没有下一次回复、Codex 查询失败的原因。
+- 进度条颜色随警告 / 危险阈值变（默认 70% / 90%）；上下文 ≥85% 时提示可以 /compact。
+- 命令面板、历史面板等浮层打开时卡片让位；在「设置 → Agent」里保留，方便调外观时实时预览。
 
-## 6. 设置
+## 7. 设置
 
-「设置 → Agent 用量」：
+「设置 → Agent」：
 
-- 总开关（默认关）：关时不采集、不注入环境变量、不显示小窗。
-- 两个来源开关（默认开）：读取会话文件 / 接收 notify 状态。关掉前者就只剩接入后的状态提示，后者关掉则不读 spool。
-- 小窗外观：停靠角落、不透明度、警告阈值（默认 70%）、危险阈值（默认 90%）。
+- 接入 Claude Code / Codex（一键或手动）。
+- 完成提醒：开关（默认开）、正看着时不提醒（默认开）、发送测试通知。
+- 额度卡片：开关（默认关）、浮动卡片显示与否、状态栏摘要、独立小窗、Codex 实时额度（默认开）、codex 位置。
+- 卡片外观：停靠角落、不透明度、警告阈值、危险阈值。
 
-## 7. 附录：调研结论（2026-10-22，一手来源优先）
+## 8. 附录：核实记录（2026-10-22）
 
-**Codex**
-
-- `token_count` 事件结构按 openai/codex 源码（codex-rs/protocol 的 `TokenCountEvent`、`RateLimitSnapshot`）核实：`info` 给 `total/last_token_usage` 与 `model_context_window`；`rate_limits` 的 primary/secondary 各含 `used_percent`（f64）、`window_minutes`、`resets_at`（epoch 秒），另含 `plan_type`。
-- notify：用户级 config.toml 顶层 `notify` 数组；唯一真正分发的事件是 `agent-turn-complete`，JSON 以最后一个 argv 传入（含 `thread-id`、`cwd`，无用量数字），通知子进程不被等待；源码在 `legacy_notify.rs`，定性为 legacy。
-- 第三方对照：ccusage 等纯本地工具没用 `rate_limits` 字段所以给不出百分比；CodexBar 的额度主路径是读 auth.json 调未公开接口（红线外）；「号池」类工具（CLIProxyAPI 等）可借鉴的只有组织方式，与展示型小窗无关，不引入。
-
-**Claude Code（已调研，未实现）**
-
-- 官方通道是 statusLine 输入的 `rate_limits`（`five_hour`/`seven_day` 的 `used_percentage` + `resets_at` epoch 秒），自 Claude Code **v2.1.80** 加入，仅 Pro/Max 会话、首次 API 响应后出现；`context_window` 字段给上下文占用（`total_input_tokens` 只算输入侧）。
-- hooks 载荷里没有任何额度/上下文数字；其余能给百分比的第三方工具靠读 OAuth 凭证调未公开的 `/api/oauth/usage`，在红线外。
-- 2026-10-22 产品决定：先只做 Codex，本节仅作存档，将来重启 Claude 支持时从这里接着核实。
+- **Claude Code statusLine**（code.claude.com/docs/en/statusline，Claude Code 2.1.302 实测）：`rate_limits.five_hour` / `seven_day` 各带 `used_percentage`、`resets_at`（epoch 秒）；`context_window` 带 `current_usage`（本次请求的 input / cache_creation / cache_read）、`context_window_size`、`used_percentage`，以及会话累计的 `total_input_tokens`。用 `claude --settings <临时文件>` 挂上 bridge 实测，拿到的值和 Claude Code 自己状态栏显示的一致。
+- **Claude Code hooks**：`Stop`、`Notification`（带 `notification_type`、`message`）、`UserPromptSubmit` 的输入都带 `session_id`、`cwd`、`transcript_path`；载荷里没有额度和上下文数字。
+- **Codex app-server**（`codex app-server generate-json-schema` 导出的 v2 协议，codex-cli 0.144.6 实测）：`initialize` → `initialized` → `account/rateLimits/read`，结果的 `rateLimitsByLimitId.codex`（或兼容的 `rateLimits`）带 `primary` / `secondary` 的 `usedPercent`、`windowDurationMins`、`resetsAt`，以及 `planType`。
+- **Codex rollout**（openai/codex 源码 `TokenCountEvent`、`RateLimitSnapshot`）：`~/.codex/sessions/年/月/日/rollout-<时间>-<thread id>.jsonl`，首行 `session_meta` 带 `id`、`cwd`；`token_count` 事件的 `info` 给 `last_token_usage` 和 `model_context_window`，`rate_limits` 是后端下发后落盘的快照。`CODEX_HOME` 可改位置（可逗号分隔多个）。
+- **Codex notify**：用户级 config.toml 顶层的 `notify` 数组，事件 JSON 作为最后一个参数传入；交互模式和 `codex exec` 都会在一轮结束时发 `agent-turn-complete`（带 `thread-id`、`cwd`、`last-assistant-message`），不等待子进程。源码里定性为 legacy，所以额度不依赖它，它只负责提醒和关联标签页。

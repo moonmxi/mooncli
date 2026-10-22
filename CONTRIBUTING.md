@@ -12,7 +12,8 @@ pnpm install
 pnpm tauri dev      # 真正的应用（Windows）
 pnpm dev            # 只调界面：浏览器打开 http://localhost:1420，用模拟 shell
 pnpm test           # 界面逻辑测试
-cd ..\ncargo test          # 核心库测试
+cd ..
+cargo test          # 核心库测试
 ```
 
 改功能前建议先读 [docs/00 愿景与范围](docs/00-vision.md) 和 [docs/01 总体架构](docs/01-architecture.md)——知道什么不做，和知道做什么一样重要。
@@ -25,5 +26,5 @@ cd ..\ncargo test          # 核心库测试
 ## 提 PR
 
 - 一件事一个 PR，说明里写清改了什么、为什么。
-- 提交前本地跑过 `cargo test` 和 `pnpm test`；CI 红了的 PR 不会合。
+- 提交前本地跑过 `cargo fmt --check`、`cargo clippy --all-targets`、`cargo test` 和 `pnpm test`；CI 红了的 PR 不会合。
 - 行为变了，记得把 `docs/` 里对应的文档一起改。

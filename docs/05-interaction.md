@@ -163,7 +163,7 @@ mooncli 为每个会话维护一个状态，由 shell 集成标记驱动：
 | `Ctrl+Shift+R` | 历史面板 |
 | `Ctrl+Shift+F` | 搜索输出 |
 | `Ctrl+Shift+B` | 显示/隐藏侧边标签栏 |
-| `Ctrl+Shift+A` | 显示/隐藏 Agent 用量小窗 |
+| `Ctrl+Shift+A` | 选中这条命令的输出 |
 | `Ctrl+,` | 设置 |
 | `Ctrl+= / Ctrl+- / Ctrl+0` | 整体缩放（界面和终端一起） |
 | `Ctrl+滚轮` | 只调终端字号 |

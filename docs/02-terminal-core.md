@@ -35,8 +35,7 @@ VT 序列表达不了所有按键组合，比如 `Ctrl+Shift+Enter`、`Ctrl+Spac
 
 `portable-pty` 创建 ConPTY 时已经带了 `WIN32_INPUT_MODE` 标志，效果是 ConPTY 启动后会向终端发 `CSI ? 9001 h`，**请求**终端改用这种编码；终端不回应，就继续用普通 VT 输入。xterm.js 不认识这个请求，所以现在用的是普通 VT 输入，一切正常。
 
-- **M1（现状）**：xterm.js 标准的 VT 编码。
-- **M2**：做一个实验开关，收到 `?9001h` 时改用 win32 输入模式编码按键，验证 PSReadLine 和 ssh、vim 都正常后再决定是否默认打开。**【待核实】**
+结论：用 xterm.js 标准的 VT 编码，不做 win32 输入模式。PSReadLine、ssh、vim 在普通 VT 输入下都正常；mooncli 自己要用的组合键（补全面板的 `Alt+/` 等）在 xterm.js 这一层就截住了，不需要传到 pwsh。
 
 ### 光标位置查询
 

@@ -16,7 +16,7 @@ mooncli 是一个 Windows 上的 pwsh 终端，浅色好看、记性好、手感
 | 外观 | 浅色主题是一等公民，不是"深色主题反过来"。布局清楚，主题、字体、颜色、背景都能细调。 |
 | 命令记忆 | 敲过的命令找得回来；输到一半能看到所有可选项；面板可以随叫随到，也可以常驻。 |
 | 使用体验 | 滚动跟手、复制粘贴不出意外；ssh、vim 这类场景下按键原样传过去，不"自作聪明"。 |
-| 智能程度 | 标签页自动显示目录、程序、Agent 标题和状态；Agent 用量实时可见。 |
+| 智能程度 | 标签页自动显示目录、程序、Agent 标题和状态；Claude Code、Codex 的额度和当前会话的上下文实时可见，一轮跑完弹通知提醒。 |
 
 ## 不做什么（至少第一版不做）
 
@@ -40,7 +40,7 @@ mooncli 是一个 Windows 上的 pwsh 终端，浅色好看、记性好、手感
 
 | 终端 | 学它什么 |
 | --- | --- |
-| Windows Terminal | ConPTY 的用法、自带新版 ConPTY、配置结构、Mica 材质、shell 集成标记 |
+| Windows Terminal | ConPTY 的用法、自带新版 ConPTY、配置结构、shell 集成标记 |
 | WezTerm | 自带 conpty.dll / OpenConsole.exe 的做法、portable-pty、可编程配置 |
 | VS Code 终端 | pwsh shell 集成脚本、命令装饰、从 pwsh 拿补全结果的方法 |
 | Warp | 命令块、历史搜索面板的交互；也是"输入框模式导致 ssh 问题"的反面参考 |

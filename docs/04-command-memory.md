@@ -191,13 +191,15 @@ Set-PSReadLineKeyHandler -Chord 'F12,F11' -ScriptBlock {
 - 常驻时用鼠标点击候选也能填入；`Alt+↑↓` 在不离开输入行的情况下选择候选，`Alt+Enter` 填入。
 - 离开提示符（命令开始执行、进入 ssh、打开 vim）时，常驻面板自动变灰，显示"当前程序不在 pwsh 提示符上"，不再刷新。
 
-## 5. 把历史库接进 PSReadLine（进阶，M4 之后）
+## 5. 把历史库接进 PSReadLine（暂不做）
 
 PSReadLine 2.2+ 支持"预测插件"（实现 `ICommandPredictor` 接口的 C# 模块）。我们可以写一个 `MoonCli.Predictor` 模块，让 PSReadLine 原生的灰色联想和 F2 列表也用上 mooncli 历史库的排序（同目录优先、成功优先）。
 
 - 好处：完全用 PSReadLine 原生的显示和按键，零冲突，ssh 场景天然不受影响。
 - 通信：模块通过命名管道问 mooncli 主进程要预测结果，要求 20ms 内返回（PSReadLine 对预测插件有超时限制）。
 - 用户可选：`PredictionSource` 设为 `HistoryAndPlugin` 时生效，不想用就不开。
+
+暂不做：要额外发布一个 C# 模块并维护命名管道协议，而补全面板已经覆盖了"按目录、成败排序的历史"这个需求。
 
 ## 6. 快捷键汇总
 

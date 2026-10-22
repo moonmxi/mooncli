@@ -165,8 +165,8 @@
 
 | 信号 | 来源 |
 | --- | --- |
-| Claude Code 的 `Notification` 钩子（等待授权、等待输入时触发） | `mooncli-bridge notify` → 命名管道 |
-| Claude Code 的 `Stop` 钩子（一轮回答结束） | 同上，显示为"完成"而不是"等你" |
+| Claude Code 的 `Notification` 钩子（要权限、要你回答时触发） | `mooncli-bridge claude-hook` → 交给主程序（docs/07 第 4 节） |
+| Claude Code 的 `Stop` 钩子、Codex 的 notify（一轮结束） | 同上，显示为"完成"而不是"等你" |
 | 程序响铃（BEL） | 终端输出 |
 | 桌面通知序列（OSC 9 / OSC 777） | 终端输出 |
 | 长时间命令结束（> 30 秒，可调） | shell 集成的 133;D |
@@ -175,9 +175,10 @@
 
 - 标签页上的强调色小点 + 标题加粗。
 - 窗口不在前台时，任务栏图标闪烁一次 + Windows 系统通知（点击直接跳到那个标签页）。
+- Agent 的提醒：你正看着那个标签页时不打扰；在看别的标签页时窗口里出一条提示。
 - 收起的侧栏里，有提醒的标签图标会有一圈细光环。
 
-Claude Code 钩子的配置由 mooncli 帮用户一键写入（见 [07](07-agent-monitor.md) 第 3 节），也可以手动配置。
+Claude Code 钩子和 Codex notify 的配置由 mooncli 帮用户一键写入（见 [07](07-agent-monitor.md) 第 5 节），也可以手动配置。
 
 ## 6. 标签页操作
 

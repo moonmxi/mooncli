@@ -9,7 +9,7 @@
    - [04 命令记忆与补全](04-command-memory.md)
    - [05 使用体验](05-interaction.md)
    - [06 智能标签页](06-smart-tabs.md)
-   - [07 Agent 用量小窗](07-agent-monitor.md)
+   - [07 Agent 额度与完成提醒](07-agent-monitor.md)
    - [08 美术风格与版面](08-art-direction.md)
 
 最后是 **怎么一步步做出来**：[09 实现计划](09-roadmap.md)，以及 **怎么发布**：[10 发布与签名](10-release.md)。
