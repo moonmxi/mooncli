@@ -8,8 +8,8 @@ mod store;
 
 pub use filter::Filter;
 pub use import::parse_psreadline_history;
-pub use search::{Hit, Query, Scope};
-pub use store::{CommandRecord, Source, Store};
+pub use search::{Hit, Query, Scope, Sort};
+pub use store::{CommandRecord, HostCount, Run, Source, Store, Summary};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

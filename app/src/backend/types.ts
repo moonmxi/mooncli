@@ -9,6 +9,12 @@ export type SessionMsg =
   | { type: "commandStarted"; text: string | null }
   | { type: "commandFinished"; text: string | null; exitCode: number | null }
   | { type: "remotePrompt" }
+  | { type: "remoteConnecting"; target: ConnectTarget }
+  | { type: "remoteConnected"; target: ConnectTarget }
+  /** `text` 由界面从屏幕上读出来后补上（TerminalView），Rust 发来时没有 */
+  | { type: "remoteCommandStarted"; seq: number; text?: string }
+  | { type: "remoteCommandFinished"; seq: number; exitCode: number | null }
+  | { type: "remoteDisconnected"; exitCode: number | null }
   | { type: "cwd"; host: string | null; path: string }
   | { type: "title"; text: string; activity: string | null; informative: boolean }
   | { type: "bell" }
@@ -18,6 +24,13 @@ export type SessionMsg =
   | { type: "completions"; data: unknown }
   | { type: "process"; kind: ProgramKind; exe: string; pid: number } // M5：进程探测
   | { type: "exited"; code: number | null };
+
+/** 连接命令要连去哪（crates/mooncli-protocol/src/remote.rs） */
+export interface ConnectTarget {
+  via: string;
+  host: string;
+  user: string | null;
+}
 
 export type ProgramKind = "pwsh" | "claude" | "codex" | "ssh" | "editor" | "git" | "node" | "python" | "build" | "other";
 
@@ -57,7 +70,48 @@ export interface HistoryHit {
   lastUsed: number;
   lastCwd: string | null;
   lastExit: number | null;
+  durationMs: number | null;
+  host: string | null;
+  favorite: boolean;
   matched: number[];
+}
+
+export type HistoryScope = { kind: "all" } | { kind: "cwd"; value: string } | { kind: "session"; value: string };
+
+export interface HistoryQuery {
+  text: string;
+  scope?: HistoryScope;
+  successOnly?: boolean;
+  failedOnly?: boolean;
+  favoritesOnly?: boolean;
+  host?: string | null;
+  dedupe?: boolean;
+  sort?: "relevance" | "recent";
+  limit?: number;
+  cwd?: string | null;
+  sessionId?: string | null;
+}
+
+export interface HistoryRun {
+  id: number;
+  startedAt: number;
+  cwd: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+  host: string | null;
+  shell: string | null;
+  imported: boolean;
+}
+
+export interface HistoryDetail {
+  summary: { count: number; ok: number; failed: number; firstUsed: number | null; avgDurationMs: number | null; dirs: number };
+  runs: HistoryRun[];
+}
+
+export interface HostCount {
+  host: string;
+  count: number;
+  remote: boolean;
 }
 
 export interface Backend {
@@ -73,6 +127,15 @@ export interface Backend {
   diagnostics(): Promise<Diagnostics>;
   sessionStats(id: string): Promise<SessionStats>;
   historySearch(text: string, opts?: { cwd?: string; limit?: number }): Promise<HistoryHit[]>;
+  /** 历史面板用的完整查询 */
+  historyQuery(q: HistoryQuery): Promise<HistoryHit[]>;
+  historyDetail(text: string): Promise<HistoryDetail>;
+  historyHosts(): Promise<HostCount[]>;
+  historyFavorite(text: string, on: boolean): Promise<void>;
+  /** 给了 id 只删那一次，否则删这条命令的全部记录 */
+  historyDelete(text: string, id?: number): Promise<number>;
+  /** 界面读出的第 seq 条远程命令的文字 */
+  remoteCommand(id: string, seq: number, text: string): void;
   create(opts: CreateOptions, onMsg: (m: SessionMsg) => void): Promise<void>;
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath 的"制品配置"：告诉 SignPath 要签哪个文件、怎么签。
+  在 SignPath 网页上新建项目时，把这份内容粘贴到 Artifact Configuration 里（docs/10 §3）。
+  CI 上传的是一个 zip（GitHub Actions 的产物总是 zip），里面只有安装包这一个文件。
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="mooncli-setup-x64.exe" product-name="mooncli">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

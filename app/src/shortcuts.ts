@@ -11,7 +11,8 @@ export type Action =
   | { type: "find" }
   | { type: "zoom"; dir: 1 | -1 | 0 }
   | { type: "settings" }
-  | { type: "palette" };
+  | { type: "palette" }
+  | { type: "history" };
 
 export function matchShortcut(e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">): Action | null {
   if (e.metaKey) return null;
@@ -29,6 +30,7 @@ export function matchShortcut(e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" 
     if (k === "b") return { type: "toggleSidebar" };
     if (k === "f") return { type: "find" };
     if (k === "p") return { type: "palette" };
+    if (k === "r") return { type: "history" };
     if (k === "tab") return { type: "prevTab" };
   }
   if (e.ctrlKey && !e.shiftKey && !e.altKey && k === "tab") return { type: "nextTab" };

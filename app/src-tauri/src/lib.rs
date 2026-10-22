@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mooncli_config::Settings;
-use mooncli_history::{Hit, Query, Store};
+use mooncli_history::{Hit, HostCount, Query, Run, Store, Summary};
 use mooncli_pty::Session;
 use mooncli_pty::shell::{LaunchRequest, ShellSpec, find_shell, launch};
 use serde::Serialize;
@@ -116,6 +116,15 @@ fn session_stats(state: State<'_, AppState>, id: String) -> CmdResult<session::S
     state.sessions.lock().unwrap().get(&id).map(|e| e.sink.stats()).ok_or_else(|| format!("会话 {id} 不存在"))
 }
 
+/// 界面读出的远程命令文字（见 session.rs 的 RemoteCmd）
+#[tauri::command]
+fn session_remote_command(state: State<'_, AppState>, id: String, seq: u64, text: String) -> CmdResult<()> {
+    let sink =
+        state.sessions.lock().unwrap().get(&id).map(|e| e.sink.clone()).ok_or_else(|| format!("会话 {id} 不存在"))?;
+    sink.remote_command_text(seq, &text);
+    Ok(())
+}
+
 #[tauri::command]
 fn session_close(state: State<'_, AppState>, id: String) {
     state.sessions.lock().unwrap().remove(&id);
@@ -128,6 +137,46 @@ fn history_search(state: State<'_, AppState>, query: Query) -> CmdResult<Vec<Hit
     let h = state.history.lock().unwrap();
     let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
     store.search(&query).map_err(err)
+}
+
+fn with_history<T>(state: &State<'_, AppState>, f: impl FnOnce(&Store) -> mooncli_history::Result<T>) -> CmdResult<T> {
+    let h = state.history.lock().unwrap();
+    let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
+    f(store).map_err(err)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryDetail {
+    summary: Summary,
+    runs: Vec<Run>,
+}
+
+/// 一条命令的详情：汇总和最近 20 次执行
+#[tauri::command]
+fn history_detail(state: State<'_, AppState>, text: String) -> CmdResult<HistoryDetail> {
+    with_history(&state, |s| Ok(HistoryDetail { summary: s.summary(&text)?, runs: s.runs(&text, 20)? }))
+}
+
+#[tauri::command]
+fn history_hosts(state: State<'_, AppState>) -> CmdResult<Vec<HostCount>> {
+    with_history(&state, |s| s.hosts())
+}
+
+#[tauri::command]
+fn history_favorite(state: State<'_, AppState>, text: String, on: bool) -> CmdResult<()> {
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    with_history(&state, |s| s.set_favorite(&text, on, now))
+}
+
+/// 删除一条命令的全部记录，或者（给了 id 时）只删那一次
+#[tauri::command]
+fn history_delete(state: State<'_, AppState>, text: String, id: Option<i64>) -> CmdResult<usize> {
+    with_history(&state, |s| match id {
+        Some(id) => s.delete_id(id),
+        None => s.delete_text(&text),
+    })
 }
 
 // ---- 设置 --------------------------------------------------------------------
@@ -334,8 +383,13 @@ pub fn run() {
             session_resize,
             session_ack,
             session_close,
+            session_remote_command,
             session_stats,
             history_search,
+            history_detail,
+            history_hosts,
+            history_favorite,
+            history_delete,
             settings_get,
             settings_set,
             clipboard_read,

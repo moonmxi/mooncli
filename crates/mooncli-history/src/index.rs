@@ -14,6 +14,7 @@ pub(crate) struct TextStats {
     pub last_used: i64,
     pub last_cwd: Option<String>,
     pub last_exit: Option<i32>,
+    pub last_duration: Option<i64>,
     pub host: Option<String>,
     /// 每次执行的时间，用于按查询时刻计算时间衰减
     pub uses: Vec<i64>,
@@ -40,6 +41,7 @@ impl Index {
                     last_used: rec.started_at,
                     last_cwd: None,
                     last_exit: None,
+                    last_duration: None,
                     host: None,
                     uses: Vec::new(),
                     cwds: HashMap::new(),
@@ -56,23 +58,26 @@ impl Index {
             *e.cwds.entry(c.clone()).or_default() += 1;
         }
         Self::count_exit(e, rec.exit_code);
-        if id >= e.last_id {
+        // "最近一次"按执行时间算：导入的旧记录 id 更大，但时间更早
+        if (rec.started_at, id) >= (e.last_used, e.last_id) {
             e.last_id = id;
             e.last_used = rec.started_at;
             e.last_cwd = rec.cwd.clone();
             e.last_exit = rec.exit_code;
+            e.last_duration = rec.duration_ms;
             e.host = rec.host.clone();
         }
         self.id_to_text.insert(id, i);
     }
 
     /// 命令结束时补退出码。只对还没有退出码的记录调用。
-    pub fn finish(&mut self, id: i64, exit: Option<i32>) {
+    pub fn finish(&mut self, id: i64, exit: Option<i32>, duration_ms: i64) {
         let Some(&i) = self.id_to_text.get(&id) else { return };
         let e = &mut self.entries[i];
         Self::count_exit(e, exit);
         if e.last_id == id {
             e.last_exit = exit;
+            e.last_duration = Some(duration_ms);
         }
     }
 

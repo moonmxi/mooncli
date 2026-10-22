@@ -17,10 +17,21 @@ interface Props {
   zoom: number;
 }
 
+/** 连到远程时状态栏说的是远程那边的情况：正在连接、等待输入、运行中 */
+function remoteLabel(tab: Tab): string | null {
+  const r = tab.remote;
+  if (!r) return null;
+  const who = r.user ? `${r.user}@${r.host}` : r.host;
+  if (!r.connected) return `正在连接 ${who}`;
+  if (tab.shellState === "altScreen") return `${who} · 全屏程序`;
+  return `${who} · ${tab.running ? "运行中" : "已连接"}`;
+}
+
 export function StatusBar({ tab, bp, size, backendKind, zoom }: Props) {
   const openSettings = useUi((s) => s.openSettings);
   const state = tab?.shellState ?? "unknown";
-  const where = tab?.remote ? tab.remote.host : tab?.cwd;
+  const remote = tab ? remoteLabel(tab) : null;
+  const where = tab?.remote ? (tab.remote.cwd ?? null) : tab?.cwd;
   return (
     <footer className="status">
       <button
@@ -32,6 +43,12 @@ export function StatusBar({ tab, bp, size, backendKind, zoom }: Props) {
         <span className={`sdot s-${state}`} />
         {tab?.env?.pwsh ? `pwsh ${tab.env.pwsh}` : "pwsh"} · {STATE_LABEL[state]}
       </button>
+      {remote && tab?.remote && (
+        <span className={`status-remote${tab.remote.connected ? " on" : ""}`} title={`通过 ${tab.remote.via ?? "ssh"} 连接`}>
+          <span className="rdot" />
+          {tab.remote.via ?? "ssh"} · {remote}
+        </span>
+      )}
       {where && <span className="path">{where}</span>}
       {bp !== "sm" && <span>UTF-8</span>}
       {bp !== "sm" && <span>{size}</span>}

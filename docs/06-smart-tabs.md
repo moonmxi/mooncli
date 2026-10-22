@@ -110,7 +110,7 @@
 | --- | --- | --- |
 | Claude Code | `claude.exe`，或 `node.exe` 的命令行里有 `@anthropic-ai/claude-code` | Claude 风格图标 |
 | Codex | `codex.exe`，或 `node.exe` 命令行里有 `@openai/codex` | Codex 风格图标 |
-| ssh | `ssh.exe` | 服务器 |
+| ssh 等远程连接 | `ssh.exe`、`mosh`、`wsl`、`docker exec -it` …（见 §4.1） | 服务器 |
 | 编辑器 | `vim` `nvim` `hx` `micro` | 编辑器 |
 | 包管理/构建 | `npm` `pnpm` `cargo` `dotnet` … | 对应语言 |
 | Python / Node | `python.exe` `node.exe`（其它情况） | 对应语言 |
@@ -120,6 +120,42 @@
 - 映射表放在设置里，用户可以加自己的程序和图标。
 - 关于 Agent 图标：内置图标用风格化的简单图形（比如 Claude 的星芒、Codex 的花括号），不直接放官方 logo；用户可以自己替换成任意图片。
 - 进程扫描只在窗口可见时进行；后台标签页降到每 3 秒一次，节省 CPU。
+
+## 4.1 连接到远程主机
+
+**问题**：`ssh box` 这条命令会一直运行到断开。如果把它当普通命令计时，只在服务器上干活的用户会看到标签页永远"运行中"、计时一直涨，看不到 mooncli 记录命令的能力。
+
+**做法**：识别出"连接类命令"，换一套记法：
+
+1. **开始**：和普通命令一样计时，标签页显示"正在连接 box"。
+2. **连上** → 这条命令算**成功完成**，耗时就是连接用的时间，记进历史。之后标签页显示空心小圆环（已连接），状态栏显示 `ssh · user@box · 已连接`。
+3. **没连上**（主机不通、密码错）→ ssh 退出，按普通命令记为失败（比如代码 255）。
+4. **连上之后**：在服务器上执行的每一条命令都单独计时，侧栏显示正在跑的远程命令，结束后显示结果；命令记进历史，标上主机名和远程目录。
+5. **断开**：只是回到本机提示符，不再记一次"ssh 完成"；非正常断开（代码不是 0）时弹一个小提示。
+
+**哪些命令算连接**（`crates/mooncli-protocol/src/remote.rs`，按参数判断，带远程命令的不算）：
+
+| 命令 | 算 | 不算 |
+| --- | --- | --- |
+| `ssh` | `ssh box`、`ssh -p 2222 me@host`、`ssh -J jump host`、`ssh -t host tmux attach` | `ssh host ls`、`ssh -N -L …`（只转发端口）、`ssh -f`、`ssh -G` |
+| `mosh`、`et`、`telnet`、`plink` | 连到一台主机 | `plink -m 文件` |
+| `wsl` | `wsl`、`wsl -d Ubuntu` | `wsl ls`、`wsl --shutdown` |
+| `docker` / `podman` / `kubectl exec` | `docker exec -it web bash`、`kubectl exec -it pod -- sh` | 不带 `-it`，或者执行的不是 shell |
+| 云厂商 | `gcloud compute ssh`、`az ssh vm`、`aws ssm start-session`、`vagrant ssh`、`multipass shell` | 带 `--command` 的 |
+
+**怎么知道连上了、远程命令什么时候开始和结束**：远程的 shell 没有 mooncli 的集成脚本，但大多会发出一些信号，按可靠程度依次用：
+
+| 信号 | 谁会发 | 用来 |
+| --- | --- | --- |
+| 远程 shell 集成的 OSC 133 标记（不带 nonce） | 远程装了 VS Code / WezTerm / iTerm2 等的 shell 集成 | 连上；命令开始（C）、结束（D，带退出码） |
+| 括号粘贴开关 `CSI ?2004 h/l` | bash 5.1+、zsh、fish 的默认行为：等输入时打开，按回车后关掉 | 连上；`l` 是命令开始，再次 `h` 是命令结束（没有退出码）。全屏程序（vim）里的开关不算 |
+| OSC 7 目录、窗口标题里的 `user@host: ~/dir` | 很多发行版的默认配置 | 连上；远程当前目录 |
+| 进入全屏（远程自动开 tmux） | — | 连上 |
+| 最后一行像提示符（以 `$ # % > ❯` 结尾，又不是密码提示） | 老系统（比如 CentOS 7 的 bash 4.2）什么都不发时的兜底 | 只用来判断连上，分不出一条条命令 |
+
+**命令文字从哪来**：远程 shell 不会告诉我们用户输了什么，但屏幕上显示着。远程回到提示符后，用户按下第一个键时光标的位置就是输入的起点（远程发了 133;B 时更准）；命令开始时，从起点读到光标处就是命令（自动换行的会接起来；按了 Ctrl+C、Ctrl+L 会重新找起点）。读的是界面里 xterm.js 的屏幕内容（`app/src/terminal/remoteInput.ts`），读到的文字送回 Rust 记进历史；开始、结束的时间由 Rust 记，两边谁先到都行。
+
+**按键归属不变**：整个过程中本机 pwsh 一直是"运行中"，按键（包括 TAB）全部原样发给远程，mooncli 不拦（docs/05 §1）。
 
 ## 5. "等你操作"提醒
 

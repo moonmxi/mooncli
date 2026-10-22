@@ -13,10 +13,12 @@ export interface Tab {
   cwd?: string;
   /** 新建时指定的起始目录（复制标签页时用） */
   initialCwd?: string;
-  remote?: { host: string; user?: string };
+  /** 连接到的远程主机（ssh、wsl、docker exec……）。connected 之前是"正在连接"（docs/06 §4.1） */
+  remote?: RemoteInfo;
   shellState: ShellState;
-  running?: { text?: string; kind: ProgramKind; since: number };
-  lastCommand?: { text?: string; exitCode: number | null; durationMs?: number; endedAt: number };
+  /** remote：在远程主机上运行的命令 */
+  running?: { text?: string; kind: ProgramKind; since: number; remote?: boolean };
+  lastCommand?: { text?: string; exitCode: number | null; durationMs?: number; endedAt: number; remote?: boolean };
   attention?: { reason: Attention; at: number };
   exited?: { code: number | null };
   env?: { pwsh?: string; host?: string; admin?: boolean };
@@ -25,6 +27,17 @@ export interface Tab {
   pinned?: boolean;
   /** 标签颜色，取主题的 ANSI 色名 */
   color?: TabColor;
+}
+
+export interface RemoteInfo {
+  host: string;
+  user?: string;
+  via?: string;
+  connected: boolean;
+  /** 开始连接 / 连上的时间 */
+  since: number;
+  /** 远程 shell 用 OSC 7 报的目录 */
+  cwd?: string;
 }
 
 export const TAB_COLORS = ["red", "yellow", "green", "cyan", "blue", "magenta"] as const;
@@ -168,11 +181,64 @@ export const useStore = create<State>((set, get) => {
           patch(id, (t) => {
             // 远程主机发来的目录（带了不同的主机名）记成远程信息，不覆盖本机目录
             const localHost = t.env?.host;
-            if (msg.host && localHost && msg.host.toLowerCase() !== localHost.toLowerCase() && t.running) {
-              return { remote: { host: msg.host } };
-            }
+            const foreign = msg.host && localHost && msg.host.toLowerCase() !== localHost.toLowerCase();
+            // 连着远程时带主机名的目录都是远程的（远程主机可能和本机同名）
+            if (msg.host && t.remote) return { remote: { ...t.remote, cwd: msg.path } };
+            if (foreign && t.running) return { remote: { host: msg.host!, connected: true, since: now, cwd: msg.path } };
             return { cwd: msg.path };
           });
+          break;
+        case "remoteConnecting":
+          patch(id, (t) => ({
+            remote: { host: msg.target.host, user: msg.target.user ?? undefined, via: msg.target.via, connected: false, since: now },
+            running: t.running ? { ...t.running, kind: "ssh" } : t.running,
+          }));
+          break;
+        case "remoteConnected":
+          // 连上了：连接命令到这里就算成功完成，不再一直显示"运行中"
+          patch(id, (t) => ({
+            running: undefined,
+            lastCommand: {
+              text: t.running?.text,
+              exitCode: 0,
+              durationMs: t.running ? now - t.running.since : undefined,
+              endedAt: now,
+            },
+            remote: {
+              host: msg.target.host,
+              user: msg.target.user ?? undefined,
+              via: msg.target.via,
+              connected: true,
+              since: now,
+              cwd: t.remote?.cwd,
+            },
+          }));
+          break;
+        case "remoteCommandStarted":
+          patch(id, () => ({
+            running: { text: msg.text || undefined, kind: guessKind(msg.text), since: now, remote: true },
+          }));
+          break;
+        case "remoteCommandFinished":
+          patch(id, (t) => {
+            const durationMs = t.running ? now - t.running.since : undefined;
+            const long = durationMs !== undefined && durationMs > LONG_COMMAND_MS;
+            // 直接按回车（没读到文字）的不算一条命令
+            if (!t.running?.text) return { running: undefined };
+            return {
+              running: undefined,
+              title: { ...t.title, program: undefined, activity: undefined },
+              lastCommand: { text: t.running.text, exitCode: msg.exitCode, durationMs, endedAt: now, remote: true },
+              attention: long && background() ? { reason: "long-command", at: now } : t.attention,
+            };
+          });
+          break;
+        case "remoteDisconnected":
+          patch(id, (t) => ({
+            running: undefined,
+            remote: undefined,
+            title: { ...t.title, program: undefined, activity: undefined },
+          }));
           break;
         case "title":
           patch(id, (t) => ({

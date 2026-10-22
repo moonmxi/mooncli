@@ -9,12 +9,13 @@ import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { base64ToBytes } from "../backend/base64";
-import type { Backend } from "../backend/types";
+import type { Backend, SessionMsg } from "../backend/types";
 import { isAppShortcut } from "../shortcuts";
 import { clamp, effectiveFontSize, LIMITS, useSettings, type AppSettings } from "../state/settings";
 import { useStore } from "../state/store";
 import { useUi } from "../state/ui";
 import { xtermTheme, type Theme } from "../theme/theme";
+import { RemoteInput } from "./remoteInput";
 
 const terminals = new Map<string, { term: Terminal; fit: FitAddon; search: SearchAddon }>();
 export const getTerminal = (id: string) => terminals.get(id);
@@ -98,6 +99,35 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
     fit.fit();
 
     const apply = useStore.getState().apply;
+    const remoteInput = new RemoteInput(term);
+    /** 远程相关的消息：顺手维护"输入起点"，命令开始时把屏幕上的文字读出来 */
+    const onRemote = (msg: SessionMsg): SessionMsg => {
+      switch (msg.type) {
+        case "remoteConnected":
+        case "remoteCommandFinished":
+          remoteInput.arm();
+          break;
+        case "remotePrompt":
+          remoteInput.arm(true);
+          break;
+        case "remoteCommandStarted": {
+          const text = remoteInput.take();
+          backend.remoteCommand(id, msg.seq, text);
+          return { ...msg, text };
+        }
+        case "remoteDisconnected": {
+          remoteInput.disarm();
+          const tab = useStore.getState().tabs.find((t) => t.id === id);
+          if (msg.exitCode !== 0 && tab?.remote && useStore.getState().activeId === id) {
+            useUi.getState().showNotice(`与 ${tab.remote.host} 的连接已断开${msg.exitCode !== null ? `（代码 ${msg.exitCode}）` : ""}`);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+      return msg;
+    };
     backend
       .create({ id, cols: term.cols, rows: term.rows, cwd: useStore.getState().tabs.find((t) => t.id === id)?.initialCwd }, (msg) => {
         if (msg.type === "output") {
@@ -106,7 +136,7 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
         }
         // 其它消息等前面的输出都画完再处理，保持先后顺序
         term.write("", () => {
-          apply(id, msg);
+          apply(id, onRemote(msg));
           if (msg.type === "exited") {
             term.write(`\r\n\x1b[90m[进程已退出，代码 ${msg.code ?? "未知"}]\x1b[0m\r\n`);
           }
@@ -114,7 +144,10 @@ export function TerminalView({ id, active, theme, backend, transparent }: Props)
       })
       .catch((e) => term.write(`\x1b[31m启动 shell 失败：${String(e)}\x1b[0m\r\n`));
 
-    term.onData((d) => backend.write(id, d));
+    term.onData((d) => {
+      remoteInput.onInput(d);
+      backend.write(id, d);
+    });
     term.onBinary((d) => backend.write(id, d));
 
     let resizeTimer = 0;

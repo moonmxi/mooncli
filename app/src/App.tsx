@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickBackend } from "./backend";
-import { Backdrop, useBackgroundUrl } from "./components/Backdrop";
+import { Backdrop, useBackgroundUrl, useRenderSize } from "./components/Backdrop";
 import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { ContextMenu } from "./components/ContextMenu";
 import { CopyToast, Notice } from "./components/CopyToast";
 import { SettingsPage } from "./components/settings/SettingsPage";
@@ -60,7 +61,9 @@ export function App() {
   const theme = builtinThemes.find((t) => t.name === themeName) ?? builtinThemes[0];
   const ui = effectiveUiScale(settings);
   const fontSize = effectiveFontSize(settings);
-  const bgUrl = useBackgroundUrl(settings.background.image, theme, backend);
+  const mainRef = useRef<HTMLElement>(null);
+  const bgSize = useRenderSize(mainRef);
+  const bgUrl = useBackgroundUrl(settings.background.image, theme, backend, bgSize);
 
   const [winWidth, setWinWidth] = useState(window.innerWidth);
   const [now, setNow] = useState(Date.now());
@@ -168,8 +171,8 @@ export function App() {
   useEffect(
     () =>
       useUi.subscribe((now, before) => {
-        const wasOpen = before.paletteOpen || before.settings.open || !!before.menu;
-        const isOpen = now.paletteOpen || now.settings.open || !!now.menu;
+        const wasOpen = before.paletteOpen || before.historyOpen || before.settings.open || !!before.menu;
+        const isOpen = now.paletteOpen || now.historyOpen || now.settings.open || !!now.menu;
         if (wasOpen && !isOpen) {
           requestAnimationFrame(() => {
             // 改名输入框等自己拿了焦点的元素不抢
@@ -236,6 +239,8 @@ export function App() {
           return u.settings.open ? u.closeSettings() : u.openSettings();
         case "palette":
           return u.setPalette(!u.paletteOpen);
+        case "history":
+          return u.setHistory(!u.historyOpen);
         case "find":
           return; // 输出搜索框：后续版本
       }
@@ -257,6 +262,7 @@ export function App() {
       { id: "pin", group: "操作", label: "置顶 / 取消置顶当前标签页", icon: "pin", keywords: ["pin"], run: () => st().activeId && st().togglePin(st().activeId!) },
       { id: "copycwd", group: "操作", label: "复制当前目录路径", icon: "folder", keywords: ["copy path", "pwd"], run: () => cur()?.cwd && copyText(cur()!.cwd!) },
       { id: "clear", group: "操作", label: "清除屏幕", icon: "eraser", keywords: ["clear", "cls"], run: () => getTerminal(st().activeId ?? "")?.term.clear() },
+      { id: "history", group: "操作", label: "历史命令", icon: "history", hint: "Ctrl+Shift+R", keywords: ["history", "recent commands"], run: () => useUi.getState().setHistory(true) },
       { id: "settings", group: "操作", label: "打开设置", icon: "gear", hint: "Ctrl+,", keywords: ["settings", "preferences"], run: () => useUi.getState().openSettings() },
       { id: "zin", group: "缩放", label: "放大", icon: "zoom", hint: "Ctrl+=", keywords: ["zoom in"], run: () => zoom(1) },
       { id: "zout", group: "缩放", label: "缩小", icon: "zoom", hint: "Ctrl+-", keywords: ["zoom out"], run: () => zoom(-1) },
@@ -329,7 +335,7 @@ export function App() {
         />
       )}
       {layout.sidebar.drawerOpen && <div className="drawer-backdrop" onClick={() => useStore.getState().setDrawerOpen(false)} />}
-      <main className={`main${bgUrl ? " has-bg" : ""}`}>
+      <main ref={mainRef} className={`main${bgUrl ? " has-bg" : ""}`}>
         <Backdrop bg={settings.background} url={bgUrl} theme={theme} />
         {tabs.map((t) => (
           <TerminalView key={t.id} id={t.id} active={t.id === activeId} theme={theme} backend={backend} transparent={!!bgUrl} />
@@ -338,6 +344,7 @@ export function App() {
       <StatusBar tab={activeTab} bp={layout.bp} size={size} backendKind={backend.kind} zoom={settings.zoom} />
       <SettingsPage backend={backend} systemDark={systemDark} />
       <CommandPalette commands={commands} backend={backend} />
+      <HistoryPanel backend={backend} onNewTab={newTab} />
       <ContextMenu />
       <CopyToast />
       <Notice />

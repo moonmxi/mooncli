@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main, "feat/**", "fix/**"]
+    # 推 v0.2.0 这样的标签就发正式版本；配好 SignPath 后正式版本会自动签名
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -61,6 +63,8 @@ jobs:
       contents: write
     env:
       PYTHONUTF8: "1"
+      # 放在这里是为了能在步骤的 if 里判断"有没有配置 SignPath"
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -112,17 +116,64 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
-      # 直接把 .exe 发到 Release 页（Actions 的"产物"一定会被打成 zip，所以不用它）。
-      # 每次推送都更新同一个 nightly 预发布版，下载地址固定：
-      #   https://github.com/<owner>/<repo>/releases/download/nightly/mooncli-setup-x64.exe
-      - name: 发布到 nightly 预发布版
-        if: github.event_name == 'push'
+      - name: 整理安装包
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force unsigned | Out-Null
+          Copy-Item $exe.FullName unsigned/mooncli-setup-x64.exe
+
+      # ---- 正式版本（推 v* 标签）：交给 SignPath 免费签名（开源项目计划），见 docs/10 §3 ----
+      # 需要的仓库设置：密钥 SIGNPATH_API_TOKEN；变量 SIGNPATH_ORGANIZATION_ID、SIGNPATH_PROJECT_SLUG、
+      #   SIGNPATH_SIGNING_POLICY_SLUG（可选 SIGNPATH_ARTIFACT_CONFIGURATION_SLUG）。没配置时发未签名的版本。
+      # SignPath 那边每次签名都要项目负责人在网页上点一次"批准"，所以日常的 nightly 不签名。
+      - name: 检查标签和版本号一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $v = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "标签 ${{ github.ref_name }} 和 tauri.conf.json 里的版本 $v 不一致" }
+      - name: 上传待签名的安装包
+        id: unsigned
+        if: startsWith(github.ref, 'refs/tags/v') && env.SIGNPATH_API_TOKEN != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: mooncli-unsigned
+          path: unsigned/mooncli-setup-x64.exe
+      - name: SignPath 签名（等负责人批准）
+        if: steps.unsigned.outcome == 'success'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # 批准要人来点，多等一会儿
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+      - name: 发布正式版本
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
-          Copy-Item $exe.FullName mooncli-setup-x64.exe
+          $file = if (Test-Path signed/mooncli-setup-x64.exe) { "signed/mooncli-setup-x64.exe" } else { "unsigned/mooncli-setup-x64.exe" }
+          $note = if ($file -like "signed/*") { "安装包已签名（SignPath Foundation 免费提供的开源项目证书）。" } else { "这个版本的安装包没有签名，Windows 可能会提示“未知发布者”。" }
+          gh release create "${{ github.ref_name }}" $file --title "mooncli ${{ github.ref_name }}" --notes "下载 mooncli-setup-x64.exe 直接运行即可安装。`n`n$note"
+
+      # ---- 日常推送：直接把 .exe 发到 nightly 预发布版 ----
+      # Actions 的"产物"一定会被打成 zip，所以发到 Release 页。下载地址固定：
+      #   https://github.com/<owner>/<repo>/releases/download/nightly/mooncli-setup-x64.exe
+      - name: 发布到 nightly 预发布版
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Copy-Item unsigned/mooncli-setup-x64.exe mooncli-setup-x64.exe
           $sha = "${{ github.sha }}".Substring(0, 7)
           gh release delete nightly --cleanup-tag --yes 2>$null
           $notes = "自动构建：分支 ${{ github.ref_name }}，提交 $sha。`n`n下载 mooncli-setup-x64.exe 直接运行即可安装。"

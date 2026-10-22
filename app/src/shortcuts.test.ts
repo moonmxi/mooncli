@@ -26,6 +26,7 @@ describe("终端级快捷键", () => {
     expect(matchShortcut(key("0", { ctrl: true }, "Digit0"))).toEqual({ type: "zoom", dir: 0 });
     expect(matchShortcut(key(",", { ctrl: true }, "Comma"))).toEqual({ type: "settings" });
     expect(matchShortcut(key("P", { ctrl: true, shift: true }, "KeyP"))).toEqual({ type: "palette" });
+    expect(matchShortcut(key("R", { ctrl: true, shift: true }, "KeyR"))).toEqual({ type: "history" });
     // AltGr（= Ctrl+Alt）打出来的字符不能被当成缩放
     expect(matchShortcut(key("-", { ctrl: true, alt: true }, "Minus"))).toBeNull();
   });

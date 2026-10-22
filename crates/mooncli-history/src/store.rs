@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{Connection, params};
@@ -55,6 +56,40 @@ impl CommandRecord {
     }
 }
 
+/// 一次执行
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub id: i64,
+    pub started_at: i64,
+    pub cwd: Option<String>,
+    pub exit_code: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub host: Option<String>,
+    pub shell: Option<String>,
+    /// 从 PSReadLine 导入的，没有目录和结果
+    pub imported: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub count: i64,
+    pub ok: i64,
+    pub failed: i64,
+    pub first_used: Option<i64>,
+    pub avg_duration_ms: Option<i64>,
+    pub dirs: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostCount {
+    pub host: String,
+    pub count: i64,
+    pub remote: bool,
+}
+
 pub struct Store {
     pub(crate) conn: Connection,
     filter: Filter,
@@ -62,7 +97,7 @@ pub struct Store {
     pub(crate) index: RefCell<Option<Index>>,
 }
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -95,6 +130,15 @@ impl Store {
                 CREATE INDEX IF NOT EXISTS idx_cmd_text ON commands(text);
                 CREATE INDEX IF NOT EXISTS idx_cmd_cwd ON commands(cwd, started_at);
                 CREATE INDEX IF NOT EXISTS idx_cmd_time ON commands(started_at);",
+            )?;
+        }
+        if version < 2 {
+            // 第 2 版：收藏的命令
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS favorites (
+                    text     TEXT PRIMARY KEY,
+                    added_at INTEGER NOT NULL
+                );",
             )?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -139,7 +183,7 @@ impl Store {
             params![id, exit_code, duration_ms],
         )?;
         if let Some(ix) = self.index.borrow_mut().as_mut() {
-            ix.finish(id, exit_code);
+            ix.finish(id, exit_code, duration_ms);
         }
         Ok(())
     }
@@ -177,7 +221,81 @@ impl Store {
     /// 删除某条命令的全部执行记录（去重视图里的"删除"）。
     pub fn delete_text(&self, text: &str) -> Result<usize> {
         self.invalidate();
+        self.conn.execute("DELETE FROM favorites WHERE text = ?1", [text])?;
         Ok(self.conn.execute("DELETE FROM commands WHERE text = ?1", [text])?)
+    }
+
+    /// 收藏或取消收藏一条命令（按文字，不分哪一次执行）。
+    pub fn set_favorite(&self, text: &str, on: bool, now_ms: i64) -> Result<()> {
+        if on {
+            self.conn
+                .execute("INSERT OR IGNORE INTO favorites (text, added_at) VALUES (?1, ?2)", params![text, now_ms])?;
+        } else {
+            self.conn.execute("DELETE FROM favorites WHERE text = ?1", [text])?;
+        }
+        Ok(())
+    }
+
+    pub fn favorites(&self) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare_cached("SELECT text FROM favorites")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// 一条命令最近的若干次执行，历史面板的详情里用。
+    pub fn runs(&self, text: &str, limit: usize) -> Result<Vec<Run>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, started_at, cwd, exit_code, duration_ms, host, shell, source
+             FROM commands WHERE text = ?1 ORDER BY started_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![text, limit as i64], |r| {
+            Ok(Run {
+                id: r.get(0)?,
+                started_at: r.get(1)?,
+                cwd: r.get(2)?,
+                exit_code: r.get(3)?,
+                duration_ms: r.get(4)?,
+                host: r.get(5)?,
+                shell: r.get(6)?,
+                imported: r.get::<_, String>(7)? == "import",
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// 一条命令的汇总：总次数、成功/失败次数、第一次用的时间、平均耗时。
+    pub fn summary(&self, text: &str) -> Result<Summary> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*),
+                    SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN exit_code IS NOT NULL AND exit_code <> 0 THEN 1 ELSE 0 END),
+                    MIN(started_at),
+                    AVG(duration_ms),
+                    COUNT(DISTINCT cwd)
+             FROM commands WHERE text = ?1",
+            [text],
+            |r| {
+                Ok(Summary {
+                    count: r.get(0)?,
+                    ok: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    failed: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    first_used: r.get(3)?,
+                    avg_duration_ms: r.get::<_, Option<f64>>(4)?.map(|v| v as i64),
+                    dirs: r.get(5)?,
+                })
+            },
+        )?)
+    }
+
+    /// 历史里出现过的主机，次数多的在前。`shell` 不是 pwsh 的是远程主机（ssh、wsl……）。
+    pub fn hosts(&self) -> Result<Vec<HostCount>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT host, COUNT(*), MAX(CASE WHEN shell IS NULL OR shell = 'pwsh' THEN 0 ELSE 1 END)
+             FROM commands WHERE host IS NOT NULL GROUP BY host ORDER BY COUNT(*) DESC LIMIT 50",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok(HostCount { host: r.get(0)?, count: r.get(1)?, remote: r.get::<_, i64>(2)? == 1 }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// 清空某个目录下的全部历史。
@@ -188,6 +306,7 @@ impl Store {
 
     pub fn clear_all(&self) -> Result<usize> {
         self.invalidate();
+        self.conn.execute("DELETE FROM favorites", [])?;
         Ok(self.conn.execute("DELETE FROM commands", [])?)
     }
 
@@ -266,5 +385,53 @@ mod tests {
         assert_eq!(s.delete_text("a").unwrap(), 2);
         assert_eq!(s.clear_cwd("/x").unwrap(), 1);
         assert_eq!(s.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn favorites_runs_and_hosts() {
+        let s = Store::open_in_memory().unwrap();
+        for (t, host, shell, exit) in
+            [("ls", "PC", "pwsh", Some(0)), ("ls", "box", "ssh", Some(2)), ("top", "box", "ssh", None)]
+        {
+            let mut r = CommandRecord::new(t, 1);
+            r.host = Some(host.into());
+            r.shell = Some(shell.into());
+            r.exit_code = exit;
+            r.duration_ms = Some(40);
+            s.insert(&r).unwrap();
+        }
+        s.set_favorite("ls", true, 5).unwrap();
+        s.set_favorite("ls", true, 6).unwrap();
+        assert_eq!(s.favorites().unwrap().len(), 1);
+        let runs = s.runs("ls", 10).unwrap();
+        assert_eq!(runs.len(), 2);
+        let sum = s.summary("ls").unwrap();
+        assert_eq!((sum.count, sum.ok, sum.failed, sum.avg_duration_ms), (2, 1, 1, Some(40)));
+        let hosts = s.hosts().unwrap();
+        assert_eq!(hosts[0].host, "box");
+        assert!(hosts[0].remote);
+        assert!(!hosts.iter().find(|h| h.host == "PC").unwrap().remote);
+        s.delete_text("ls").unwrap();
+        assert!(s.favorites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn upgrades_version_1_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("history.db");
+        {
+            let c = Connection::open(&p).unwrap();
+            c.execute_batch(
+                "CREATE TABLE commands (id INTEGER PRIMARY KEY, text TEXT NOT NULL, cwd TEXT, exit_code INTEGER,
+                 started_at INTEGER NOT NULL, duration_ms INTEGER, session_id TEXT, host TEXT, shell TEXT,
+                 source TEXT NOT NULL);
+                 INSERT INTO commands (text, started_at, source) VALUES ('old', 1, 'live');
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        s.set_favorite("old", true, 2).unwrap();
+        assert_eq!(s.count().unwrap(), 1);
     }
 }

@@ -30,5 +30,6 @@ export function TabStatus({ tab, now, showDuration }: { tab: Tab; now: number; s
       <span className="bad-mark">✗ {last.exitCode}</span>
     );
   }
+  if (tab.remote?.connected) return <span className="dot remote" title={`已连接 ${tab.remote.host}`} />;
   return null;
 }

@@ -35,6 +35,7 @@ const paths: Record<string, string> = {
   keyboard: "M3 7h18v11H3Z M7 11h.01 M11 11h.01 M15 11h.01 M8 14.5h8",
   info: "M12 4a8 8 0 1 1 0 16 8 8 0 0 1 0-16Z M12 11v5 M12 8h.01",
   check: "M5 12.5l4.5 4.5L19 7.5",
+  star: "M12 4l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4l-4.8 2.5.9-5.4-3.9-3.8 5.4-.8Z",
   trash: "M5 7h14 M10 7V5h4v2 M7 7l1 13h8l1-13",
 };
 

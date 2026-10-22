@@ -13,7 +13,7 @@ export interface TitleContext {
   cwd?: string;
   profile: string;
   running?: { text?: string; kind?: ProgramKind };
-  remote?: { host: string; user?: string };
+  remote?: { host: string; user?: string; via?: string };
 }
 
 export function dirName(path?: string): string | undefined {
@@ -59,7 +59,7 @@ export function metaLine(ctx: TitleContext & { git?: string }, full = false): st
   }
   if (ctx.git) parts.push(ctx.git);
   const prog = programName(ctx.running?.text);
-  parts.push(prog ?? "pwsh");
+  parts.push(prog ?? (ctx.remote ? (ctx.remote.via ?? "ssh") : "pwsh"));
   return parts.join(" · ");
 }
 

@@ -19,6 +19,16 @@ pub enum Scope {
     Session(String),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sort {
+    /// 匹配程度、常用程度、目录、成败综合打分
+    #[default]
+    Relevance,
+    /// 最近用过的在前（历史面板没输入时用）
+    Recent,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Query {
@@ -27,8 +37,16 @@ pub struct Query {
     pub scope: Scope,
     #[serde(default)]
     pub success_only: bool,
+    /// 只看失败过的执行
+    #[serde(default)]
+    pub failed_only: bool,
+    /// 只看收藏的命令
+    #[serde(default)]
+    pub favorites_only: bool,
     #[serde(default)]
     pub host: Option<String>,
+    #[serde(default)]
+    pub sort: Sort,
     /// 相同命令只显示一条
     #[serde(default = "yes")]
     pub dedupe: bool,
@@ -56,7 +74,10 @@ impl Query {
             text: text.into(),
             scope: Scope::All,
             success_only: false,
+            failed_only: false,
+            favorites_only: false,
             host: None,
+            sort: Sort::Relevance,
             dedupe: true,
             limit: default_limit(),
             now_ms,
@@ -77,7 +98,10 @@ pub struct Hit {
     pub last_used: i64,
     pub last_cwd: Option<String>,
     pub last_exit: Option<i32>,
+    /// 最近一次的耗时
+    pub duration_ms: Option<i64>,
     pub host: Option<String>,
+    pub favorite: bool,
     /// 匹配到的字符位置（按字符计），界面用来高亮
     pub matched: Vec<u32>,
     pub score: f64,
@@ -99,18 +123,32 @@ impl Store {
     pub fn search(&self, q: &Query) -> Result<Vec<Hit>> {
         let mut fz = Fuzzy::new(&q.text);
         let recent = self.recent_in_session(q)?;
-        if q.dedupe && q.scope == Scope::All && !q.success_only && q.host.is_none() {
-            return self.search_index(q, &mut fz, &recent);
+        let favorites = self.favorites()?;
+        let simple =
+            q.scope == Scope::All && !q.success_only && !q.failed_only && !q.favorites_only && q.host.is_none();
+        let mut hits = if q.dedupe && simple {
+            self.search_index(q, &mut fz, &recent)?
+        } else {
+            self.search_sql(q, &mut fz, &recent)?
+        };
+        for h in &mut hits {
+            h.favorite = favorites.contains(&h.text);
         }
+        Ok(hits)
+    }
+
+    fn search_sql(&self, q: &Query, fz: &mut Fuzzy, recent: &[String]) -> Result<Vec<Hit>> {
         let mut cands = self.candidates_from_sql(q)?;
         cands.retain_mut(|c| match fz.score(&c.hit.text) {
             Some(m) => {
-                c.hit.score = m + rank_bonus(c, q, &recent);
+                c.hit.score = m + rank_bonus(c, q, recent);
                 true
             }
             None => false,
         });
-        if q.dedupe {
+        if q.sort == Sort::Recent {
+            cands.sort_by(|a, b| b.hit.last_used.cmp(&a.hit.last_used).then(b.hit.id.cmp(&a.hit.id)));
+        } else if q.dedupe {
             cands.sort_unstable_by(|a, b| b.hit.score.total_cmp(&a.hit.score).then(b.hit.id.cmp(&a.hit.id)));
         }
         // 不去重时按时间顺序展示每一次执行（SQL 已经按时间倒序取出）
@@ -139,8 +177,10 @@ impl Store {
                 ok: e.ok as i64,
                 failed: e.failed as i64,
             };
-            scored.push((m + bonus(&stats, &e.text, q, recent), e.last_id, i));
+            let rank = if q.sort == Sort::Recent { e.last_used as f64 } else { m + bonus(&stats, &e.text, q, recent) };
+            scored.push((rank, e.last_id, i));
         }
+        // 按时间排时 rank 就是最近一次的时间
         let by_rank = |a: &(f64, i64, usize), b: &(f64, i64, usize)| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1));
         if scored.len() > q.limit && q.limit > 0 {
             scored.select_nth_unstable_by(q.limit - 1, by_rank);
@@ -159,7 +199,9 @@ impl Store {
                     last_used: e.last_used,
                     last_cwd: e.last_cwd.clone(),
                     last_exit: e.last_exit,
+                    duration_ms: e.last_duration,
                     host: e.host.clone(),
+                    favorite: false,
                     matched: fz.indices(&e.text),
                     score,
                 }
@@ -185,6 +227,12 @@ impl Store {
         if q.success_only {
             wheres.push("exit_code = 0".into());
         }
+        if q.failed_only {
+            wheres.push("exit_code IS NOT NULL AND exit_code <> 0".into());
+        }
+        if q.favorites_only {
+            wheres.push("text IN (SELECT text FROM favorites)".into());
+        }
         let now = arg(Value::Integer(q.now_ms), &mut args);
         let cwd = arg(q.cwd.clone().map(Value::Text).unwrap_or(Value::Null), &mut args);
         let where_sql = wheres.join(" AND ");
@@ -199,7 +247,7 @@ impl Store {
         // 只用一个 MAX() 聚合，这样 SQLite 的"裸列"会取自 id 最大（最近）的那一行
         let sql = if q.dedupe {
             format!(
-                "SELECT MAX(id), text, COUNT(*), started_at, cwd, exit_code, host,
+                "SELECT MAX(id), text, COUNT(*), started_at, cwd, exit_code, host, duration_ms,
                         SUM({weight}),
                         SUM(CASE WHEN cwd = {cwd} THEN 1 ELSE 0 END),
                         SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END),
@@ -209,7 +257,7 @@ impl Store {
             )
         } else {
             format!(
-                "SELECT id, text, 1, started_at, cwd, exit_code, host, {weight},
+                "SELECT id, text, 1, started_at, cwd, exit_code, host, duration_ms, {weight},
                         CASE WHEN cwd = {cwd} THEN 1 ELSE 0 END,
                         CASE WHEN exit_code = 0 THEN 1 ELSE 0 END,
                         CASE WHEN exit_code IS NOT NULL AND exit_code <> 0 THEN 1 ELSE 0 END
@@ -228,10 +276,12 @@ impl Store {
                     last_cwd: r.get(4)?,
                     last_exit: r.get(5)?,
                     host: r.get(6)?,
+                    duration_ms: r.get(7)?,
+                    favorite: false,
                     matched: Vec::new(),
                     score: 0.0,
                 },
-                stats: Stats { weighted_uses: r.get(7)?, here: r.get(8)?, ok: r.get(9)?, failed: r.get(10)? },
+                stats: Stats { weighted_uses: r.get(8)?, here: r.get(9)?, ok: r.get(10)?, failed: r.get(11)? },
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -413,6 +463,25 @@ mod tests {
         let mut q = Query::new("", NOW);
         q.scope = Scope::Session("s3".into());
         assert_eq!(texts(&s.search(&q).unwrap()), vec!["npm run build"]);
+    }
+
+    #[test]
+    fn recent_sort_failed_filter_and_favorites() {
+        let s = sample();
+        let mut q = Query::new("", NOW);
+        q.sort = Sort::Recent;
+        // 最近用过的在前：git pull 是今天，git push origin main 是一天前
+        assert_eq!(texts(&s.search(&q).unwrap())[..2], ["git pull --rebase", "git push origin main"]);
+        let mut q = Query::new("", NOW);
+        q.failed_only = true;
+        assert_eq!(texts(&s.search(&q).unwrap()), vec!["git push --force-with-lease"]);
+        s.set_favorite("npm run build", true, NOW).unwrap();
+        let mut q = Query::new("", NOW);
+        q.favorites_only = true;
+        let hits = s.search(&q).unwrap();
+        assert_eq!(texts(&hits), vec!["npm run build"]);
+        assert!(hits[0].favorite);
+        assert!(!s.search(&Query::new("git pull", NOW)).unwrap()[0].favorite);
     }
 
     #[test]

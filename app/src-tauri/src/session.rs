@@ -7,7 +7,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use mooncli_history::{CommandRecord, Store};
-use mooncli_protocol::{ShellEvent, ShellState, Tracker, TrackerUpdate, clean_title, is_uninformative};
+use mooncli_protocol::{
+    ConnectTarget, ShellEvent, ShellState, Tracker, TrackerUpdate, clean_title, cwd_from_title, is_uninformative,
+};
 use mooncli_pty::{Item, Sink};
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -20,6 +22,11 @@ pub enum UiMsg {
     CommandStarted { text: Option<String> },
     CommandFinished { text: Option<String>, exit_code: Option<i32> },
     RemotePrompt,
+    RemoteConnecting { target: ConnectTarget },
+    RemoteConnected { target: ConnectTarget },
+    RemoteCommandStarted { seq: u64 },
+    RemoteCommandFinished { seq: u64, exit_code: Option<i32> },
+    RemoteDisconnected { exit_code: Option<i32> },
     Cwd { host: Option<String>, path: String },
     Title { text: String, activity: Option<String>, informative: bool },
     Bell,
@@ -39,11 +46,29 @@ struct Running {
     started_at: i64,
 }
 
+/// 一条远程命令。开始、结束的时间由这里记，命令文字要等界面从屏幕上读出来再送过来，两边谁先到都行。
+struct RemoteCmd {
+    seq: u64,
+    started_at: i64,
+    /// 开始时的远程目录（命令文字送到时目录可能已经变了，比如 cd）
+    cwd: Option<String>,
+    text_known: bool,
+    record_id: Option<i64>,
+    finished: Option<(Option<i32>, i64)>,
+}
+
+struct RemoteInfo {
+    target: ConnectTarget,
+    cwd: Option<String>,
+}
+
 #[derive(Default)]
 struct SessionInfo {
     cwd: Option<String>,
     host: Option<String>,
     running: Option<Running>,
+    remote: Option<RemoteInfo>,
+    remote_cmds: Vec<RemoteCmd>,
 }
 
 /// 每个会话收到了什么，诊断"未集成"用：
@@ -123,12 +148,25 @@ impl UiSink {
         }
         match e {
             ShellEvent::Cwd { host, path } => {
-                if host.is_none() || self.tracker.lock().unwrap().state() == ShellState::Prompt {
-                    self.info.lock().unwrap().cwd = Some(path.clone());
+                let mut info = self.info.lock().unwrap();
+                if let Some(r) = info.remote.as_mut().filter(|_| host.is_some()) {
+                    r.cwd = Some(path.clone());
+                } else if host.is_none() || self.tracker.lock().unwrap().state() == ShellState::Prompt {
+                    info.cwd = Some(path.clone());
                 }
+                drop(info);
                 self.send(UiMsg::Cwd { host, path });
             }
             ShellEvent::Title { text } => {
+                // 连在远程时，标题里常带着远程的目录（user@host: ~/dir）
+                if let Some((host, path)) = cwd_from_title(&text) {
+                    let mut info = self.info.lock().unwrap();
+                    if let Some(r) = info.remote.as_mut().filter(|r| r.cwd.as_deref() != Some(path.as_str())) {
+                        r.cwd = Some(path.clone());
+                        drop(info);
+                        self.send(UiMsg::Cwd { host: Some(host), path });
+                    }
+                }
                 let t = clean_title(&text);
                 let informative = !is_uninformative(&t.text);
                 self.send(UiMsg::Title { text: t.text, activity: t.activity, informative });
@@ -147,7 +185,10 @@ impl UiSink {
                 _ => {}
             },
             // 提示符、命令、全屏程序这些由状态机处理
-            ShellEvent::Mark { .. } | ShellEvent::CommandEnd { .. } | ShellEvent::AltScreen { .. } => {}
+            ShellEvent::Mark { .. }
+            | ShellEvent::CommandEnd { .. }
+            | ShellEvent::AltScreen { .. }
+            | ShellEvent::BracketedPaste { .. } => {}
         }
     }
 
@@ -169,6 +210,91 @@ impl UiSink {
                 self.send(UiMsg::CommandFinished { text, exit_code });
             }
             TrackerUpdate::RemotePrompt => self.send(UiMsg::RemotePrompt),
+            TrackerUpdate::RemoteConnecting { target } => self.send(UiMsg::RemoteConnecting { target }),
+            TrackerUpdate::RemoteConnected { target } => {
+                // 连上了：连接命令到这里算成功完成，耗时就是连接用的时间
+                let mut info = self.info.lock().unwrap();
+                if let Some(r) = info.running.take()
+                    && let (Some(id), Some(store)) = (r.record_id, self.history.lock().unwrap().as_ref())
+                {
+                    let _ = store.finish(id, Some(0), now_ms() - r.started_at);
+                }
+                info.remote = Some(RemoteInfo { target: target.clone(), cwd: None });
+                info.remote_cmds.clear();
+                drop(info);
+                self.send(UiMsg::RemoteConnected { target });
+            }
+            TrackerUpdate::RemoteCommandStarted { seq } => {
+                let mut info = self.info.lock().unwrap();
+                // 界面一直没送文字的旧记录（比如界面重新加载了）不要越攒越多
+                if info.remote_cmds.len() > 16 {
+                    info.remote_cmds.remove(0);
+                }
+                let cwd = info.remote.as_ref().and_then(|r| r.cwd.clone());
+                info.remote_cmds.push(RemoteCmd {
+                    seq,
+                    started_at: now_ms(),
+                    cwd,
+                    text_known: false,
+                    record_id: None,
+                    finished: None,
+                });
+                drop(info);
+                self.send(UiMsg::RemoteCommandStarted { seq });
+            }
+            TrackerUpdate::RemoteCommandFinished { seq, exit_code } => {
+                let mut info = self.info.lock().unwrap();
+                if let Some(i) = info.remote_cmds.iter().position(|c| c.seq == seq) {
+                    let c = &mut info.remote_cmds[i];
+                    let duration = now_ms() - c.started_at;
+                    c.finished = Some((exit_code, duration));
+                    if c.text_known {
+                        if let (Some(id), Some(store)) = (c.record_id, self.history.lock().unwrap().as_ref()) {
+                            let _ = store.finish(id, exit_code, duration);
+                        }
+                        info.remote_cmds.remove(i);
+                    }
+                }
+                drop(info);
+                self.send(UiMsg::RemoteCommandFinished { seq, exit_code });
+            }
+            TrackerUpdate::RemoteDisconnected { exit_code } => {
+                self.info.lock().unwrap().remote = None;
+                self.send(UiMsg::RemoteDisconnected { exit_code });
+            }
+        }
+    }
+
+    /// 界面从屏幕上读出了第 `seq` 条远程命令的文字。空的（直接按了回车）不记。
+    pub fn remote_command_text(&self, seq: u64, text: &str) {
+        let mut info = self.info.lock().unwrap();
+        let Some(i) = info.remote_cmds.iter().position(|c| c.seq == seq) else { return };
+        let text = text.trim();
+        if text.is_empty() {
+            info.remote_cmds.remove(i);
+            return;
+        }
+        let (host, via) = match &info.remote {
+            Some(r) => (Some(r.target.host.clone()), r.target.via.clone()),
+            None => (None, "ssh".to_string()),
+        };
+        let c = &mut info.remote_cmds[i];
+        let mut rec = CommandRecord::new(text, c.started_at);
+        rec.cwd = c.cwd.clone();
+        rec.host = host;
+        rec.session_id = Some(self.id.clone());
+        rec.shell = Some(via);
+        if let Some((exit, duration)) = c.finished {
+            rec.exit_code = exit;
+            rec.duration_ms = Some(duration);
+        }
+        let history = self.history.lock().unwrap();
+        let id = history.as_ref().and_then(|s| s.insert(&rec).ok().flatten());
+        if c.finished.is_some() {
+            info.remote_cmds.remove(i);
+        } else {
+            c.text_known = true;
+            c.record_id = id;
         }
     }
 
@@ -193,6 +319,10 @@ impl Sink for UiSink {
                     self.counters.output_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
                     let data = base64::engine::general_purpose::STANDARD.encode(&b);
                     self.send(UiMsg::Output { data, bytes });
+                    let updates = self.tracker.lock().unwrap().observe_output(&b);
+                    for u in updates {
+                        self.on_update(u);
+                    }
                 }
                 Item::Event(e) => self.on_event(e),
             }

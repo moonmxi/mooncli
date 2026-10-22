@@ -51,7 +51,7 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
     </button>
   );
 
-  // 居中弹窗：周围留出半透明遮罩，点遮罩、按 Esc、点"完成"或右上角 × 都能关闭
+  // 居中弹窗：周围留出半透明遮罩，点遮罩、按 Esc 或右上角 × 都能关闭
   return (
     <div className="set-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div
@@ -72,10 +72,7 @@ export function SettingsPage({ backend, systemDark }: { backend: Backend; system
           <Icon name="gear" />
           <h2>设置</h2>
           <span className="set-saved">改动立即生效，并自动保存</span>
-          <button type="button" className="btn primary set-done" onClick={close}>
-            完成
-          </button>
-          <button type="button" className="icon-btn" aria-label="关闭设置 (Esc)" title="关闭 (Esc)" onClick={close}>
+          <button type="button" className="icon-btn set-close" aria-label="关闭设置 (Esc)" title="关闭 (Esc)" onClick={close}>
             <Icon name="close" />
           </button>
         </header>

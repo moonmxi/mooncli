@@ -60,6 +60,10 @@ export function Sidebar({ width, density, mode, drawerOpen, uiScale, now, action
           <Icon name="gear" />
           <span className="lbl">设置</span>
         </button>
+        <button type="button" className="foot-btn" onClick={() => useUi.getState().setHistory(true)} title="历史命令 (Ctrl+Shift+R)">
+          <Icon name="history" />
+          <span className="lbl">历史</span>
+        </button>
         <button type="button" className="foot-btn" onClick={onCycleTheme} title="换一个主题">
           <Icon name="palette" />
           <span className="lbl">主题</span>

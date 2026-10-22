@@ -2,13 +2,14 @@
 
 ## 1. 去哪下载
 
-每次推送，CI 都会在 Windows 上打出安装包，直接发到 GitHub 的 **Release 页**（不是 Actions 的"产物"，那里的文件一定会被打成 zip）：
+| 版本 | 怎么来的 | 地址 | 签名 |
+| --- | --- | --- | --- |
+| 预览版（nightly） | 每次推送分支自动构建，替换成最新的一份 | `https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe` | 不签 |
+| 正式版本 | 推 `v0.2.0` 这样的标签时构建 | [Releases 页面](https://github.com/moonmxi/mooncli/releases) | SignPath 配好后自动签 |
 
-- 地址固定：`https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe`
-- 也可以在仓库的 Releases 页面找到 `nightly` 预发布版，说明里写了是哪个分支、哪次提交打的
-- 每次推送都会替换成最新的一份
+两种都是直接发到 GitHub 的 **Release 页**的 `.exe`，不经过 Actions 的"产物"（那里的文件一定会被打成 zip）。
 
-安装包里附带了新版 ConPTY（`conpty.dll`、`OpenConsole.exe`，来自微软官方的 NuGet 包，MIT 协议），由 `tools/fetch_conpty.py` 在打包前下载并校验哈希。
+安装包里附带了新版 ConPTY（`conpty.dll`、`OpenConsole.exe`，来自微软官方的 NuGet 包，MIT 协议），由 `tools/fetch_conpty.py` 在打包前下载并校验哈希。安装包和安装向导用的是 mooncli 的图标（`app/src-tauri/icons/icon.ico`、`nsis-header.bmp`、`nsis-sidebar.bmp`）。
 
 ## 2. 为什么安装时会被拦
 
@@ -19,27 +20,61 @@
 | 浏览器提示"不常下载，可能有害" | Edge / Chrome 的下载保护 | 文件没有签名，下载的人又少 |
 | "Windows 已保护你的电脑" | Windows SmartScreen | 同上 |
 
-这两道提醒看的都是**发布者是谁、有没有信誉**，不是看程序内容。所以只靠改代码去不掉，要么给安装包签名，要么换发布渠道。正规的办法有下面几种：
+这两道提醒看的是**发布者是谁、有没有信誉**，不看程序内容，所以改代码去不掉，只能签名。mooncli 是开源项目，选的是 **SignPath Foundation 的免费签名**：SignPath Foundation 以基金会的名义持有证书，给符合条件的开源项目签名，不收费。
 
-| 办法 | 效果 | 成本 | 需要你做的 |
-| --- | --- | --- | --- |
-| **Azure Artifact Signing**（原 Trusted Signing） | 微软的签名服务，签出来的程序 SmartScreen 认可度高，通常很快就不再提醒 | 约每月 10 美元；要做身份验证，个人开发者能否申请取决于所在地区 **【待核实】** | 开通服务、完成验证，把密钥填进仓库的 Secrets |
-| **SignPath Foundation** | 给开源项目免费签名 | 免费 | 仓库要公开并使用开源协议，提交申请等审核 |
-| **普通 OV 代码签名证书** | 签名后不再显示"未知发布者"，但 SmartScreen 信誉要靠下载量慢慢积累，前期可能还会提醒 | 每年几百元到上千元 | 购买证书（现在都放在硬件或云端，不能直接放进 CI，需要配合对应的签名工具） |
-| **上架 Microsoft Store** | 由微软签名，从商店安装没有任何提醒 | 个人开发者免费注册 **【待核实】** | 注册开发者账号；我们需要把安装包改成 MSIX 格式并通过审核 |
+不会做的：教用户关掉 SmartScreen，或者用技术手段绕过提醒。
 
-不推荐、也不会去做的：教用户关掉 SmartScreen，或者用技术手段绕过提醒。这些办法让所有程序都不再受保护，而且不长久。
+## 3. 申请 SignPath 免费签名
 
-## 3. CI 里已经准备好的签名步骤
+### 已经准备好的
 
-CI 已经写好了 Azure Artifact Signing 的签名步骤，**配好密钥就自动生效**，没配的时候照常打出未签名的安装包。在仓库的 Settings → Secrets and variables → Actions 里添加：
+SignPath 的条件（[signpath.org/terms](https://signpath.org/terms)）和仓库里对应的准备：
 
-| 名称 | 内容 |
+| 条件 | 怎么满足 |
 | --- | --- |
-| `AZURE_CLIENT_ID`、`AZURE_CLIENT_SECRET`、`AZURE_TENANT_ID` | 有签名权限的 Azure 应用凭据 |
-| `SIGNING_ENDPOINT` | 签名账户所在区域的地址，比如 `https://wus2.codesigning.azure.net` |
-| `SIGNING_ACCOUNT`、`SIGNING_PROFILE` | 签名账户名和证书配置名 |
+| 开源协议（OSI 认可），所有组件都开源 | [`LICENSE`](../LICENSE) 是 MIT；附带的 Nerd Font 符号字体和 ConPTY 也是 MIT |
+| 项目在维护、已经发布过 | 仓库公开，Release 页有 `nightly`；申请前最好先推一个 `v0.1.0` 正式版本 |
+| 主页和下载页写明"代码签名政策" | README 的[代码签名政策](../README.md#代码签名政策--code-signing-policy)一节：致谢语、团队角色、批准方式 |
+| 隐私说明 | README 的"隐私"一节，用的是 SignPath 建议的说法，另外说明了 WebView2 的下载 |
+| 只签自己源码构建的程序，在可信的构建系统上构建 | CI 在 GitHub Actions 上构建，安装包直接从构建任务交给 SignPath |
+| 每次签名都要人工批准 | SignPath 那边设置"批准人"；所以只给正式版本签名，nightly 不签 |
+| 产品名、版本号要和项目一致 | 安装包的产品名是 mooncli；CI 会检查标签和 `tauri.conf.json` 里的版本号一致 |
+| 安装程序要说明对系统做了什么、能卸载 | Tauri 生成的 NSIS 安装程序装在当前用户目录，带卸载程序 |
+| 团队成员都开启两步验证 | **需要你确认** GitHub 账号已开启两步验证（2FA） |
 
-配好以后，CI 会安装 `trusted-signing-cli`，并通过 Tauri 的 `bundle.windows.signCommand` 给程序本体和安装包都签上名。签名工具的名字和参数以开通时的官方文档为准，第一次配置后看一眼 CI 日志确认 **【待核实】**。
+### 需要你来做的
 
-选其它办法（SignPath、OV 证书）时，只需要把"准备签名工具"那一步换成对应工具的命令。
+1. **确认 GitHub 已开启两步验证**（Settings → Password and authentication）。
+2. **先发一个正式版本**：在 `main` 上打标签并推送，比如 `git tag v0.1.0 && git push origin v0.1.0`。CI 会发一个未签名的 `v0.1.0`。
+3. **提交申请**：打开 [signpath.org/apply](https://signpath.org/apply)，填项目地址 `https://github.com/moonmxi/mooncli`、下载页（Releases 页面）、项目简介（可以直接用 README 开头那段）。审核通过后会收到 SignPath 的账号邀请。审核要多久、表格具体问什么，以实际页面为准 **【待核实】**。
+4. **在 SignPath 网页上建项目**（通过后按他们的引导做）：
+   - 关联 GitHub 仓库，把 GitHub Actions 设为可信的构建系统；
+   - 新建制品配置（Artifact Configuration），内容直接用仓库里的 [`.signpath/artifact-configuration.xml`](../.signpath/artifact-configuration.xml)；
+   - 新建签名策略（Signing Policy），比如叫 `release-signing`，批准人设成自己；
+   - 生成一个 API Token。
+5. **把这些填进 GitHub 仓库**（Settings → Secrets and variables → Actions）：
+
+   | 类型 | 名称 | 内容 |
+   | --- | --- | --- |
+   | Secret | `SIGNPATH_API_TOKEN` | 上一步生成的 API Token |
+   | Variable | `SIGNPATH_ORGANIZATION_ID` | SignPath 组织 ID |
+   | Variable | `SIGNPATH_PROJECT_SLUG` | 项目的短名，比如 `mooncli` |
+   | Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | 签名策略的短名，比如 `release-signing` |
+   | Variable | `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | 可选，不填就用项目的默认制品配置 |
+
+6. 之后每次发版本：推 `v*` 标签 → CI 构建并把安装包交给 SignPath → 你在 SignPath 网页（或邮件链接）上点"批准" → CI 拿回签好的安装包发到 Release 页。CI 最多等一小时。
+
+### 签名之后还会提醒吗
+
+签名后不再显示"未知发布者"，发布者显示为 SignPath Foundation。SmartScreen 的信誉还要随着下载量积累，最开始几个版本仍可能偶尔提醒，之后会消失。只给安装包签名（程序本体在安装包里是压缩的，没法单独签），SmartScreen 检查的就是下载下来的安装包。
+
+## 4. 其它签名方式（备用）
+
+CI 里还保留了 **Azure Artifact Signing**（原 Trusted Signing，微软的付费签名服务，约每月 10 美元）的步骤：配置 `AZURE_CLIENT_ID`、`AZURE_CLIENT_SECRET`、`AZURE_TENANT_ID`、`SIGNING_ENDPOINT`、`SIGNING_ACCOUNT`、`SIGNING_PROFILE` 后，每次构建都会通过 Tauri 的 `bundle.windows.signCommand` 签名。两种方式不要同时配。
+
+| 办法 | 成本 | 说明 |
+| --- | --- | --- |
+| SignPath Foundation（当前选择） | 免费 | 开源项目，需审核，每次签名人工批准 |
+| Azure Artifact Signing | 约每月 10 美元 | 需身份验证，个人开发者能否申请取决于所在地区 **【待核实】** |
+| 普通 OV 证书 | 每年几百到上千元 | 信誉要慢慢积累 |
+| Microsoft Store | 个人开发者免费注册 **【待核实】** | 要改成 MSIX 格式并通过审核 |

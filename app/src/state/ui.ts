@@ -1,4 +1,4 @@
-// 浮层的状态：复制提醒、小提示、右键菜单、命令面板、设置页。
+// 浮层的状态：复制提醒、小提示、右键菜单、命令面板、历史面板、设置页。
 import { create } from "zustand";
 
 export interface MenuItem {
@@ -23,12 +23,14 @@ interface UiState {
   /** 最近一次打开右键菜单的位置：菜单里的"复制"类操作把提醒卡片放在这里 */
   lastMenuAt: { x: number; y: number };
   paletteOpen: boolean;
+  historyOpen: boolean;
   settings: { open: boolean; section: SettingsSection };
   showCopyToast(x: number, y: number, text: string): void;
   showNotice(text: string): void;
   openMenu(x: number, y: number, items: MenuEntry[]): void;
   closeMenu(): void;
   setPalette(open: boolean): void;
+  setHistory(open: boolean): void;
   openSettings(section?: SettingsSection): void;
   closeSettings(): void;
 }
@@ -41,6 +43,7 @@ export const useUi = create<UiState>((set) => ({
   menu: null,
   lastMenuAt: { x: 0, y: 0 },
   paletteOpen: false,
+  historyOpen: false,
   settings: { open: false, section: "appearance" },
   showCopyToast(x, y, text) {
     const lines = text.split(/\r?\n/).length;
@@ -56,10 +59,13 @@ export const useUi = create<UiState>((set) => ({
     set({ menu: null });
   },
   setPalette(open) {
-    set({ paletteOpen: open, menu: null });
+    set({ paletteOpen: open, menu: null, ...(open ? { historyOpen: false } : {}) });
+  },
+  setHistory(open) {
+    set({ historyOpen: open, menu: null, ...(open ? { paletteOpen: false } : {}) });
   },
   openSettings(section) {
-    set((s) => ({ settings: { open: true, section: section ?? s.settings.section }, paletteOpen: false, menu: null }));
+    set((s) => ({ settings: { open: true, section: section ?? s.settings.section }, paletteOpen: false, historyOpen: false, menu: null }));
   },
   closeSettings() {
     set((s) => ({ settings: { ...s.settings, open: false } }));

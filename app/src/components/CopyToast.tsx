@@ -1,9 +1,10 @@
-// "已复制"小卡片：在右键处（或选区末尾）弹出，一个带弹性的出场、勾号描线、向上飘走的退场。
+// "已复制"小卡片：在右键处（或选区末尾）弹出，一个带弹性的出场、logo 升起、向上飘走的退场。
 // 规格见 docs/05 §4。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { clampToViewport, copySummary, useUi } from "../state/ui";
 
-const STAY_MS = 1400;
+// 停留时间短一点：看到就够了，不要挡着后面的字
+const STAY_MS = 900;
 
 export function CopyToast() {
   const toast = useUi((s) => s.copyToast);
@@ -18,7 +19,7 @@ export function CopyToast() {
     setPos(null);
     setLeaving(false);
     const t1 = setTimeout(() => setLeaving(true), STAY_MS);
-    const t2 = setTimeout(() => setShown(null), STAY_MS + 320);
+    const t2 = setTimeout(() => setShown(null), STAY_MS + 280);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -45,11 +46,8 @@ export function CopyToast() {
       aria-live="polite"
     >
       <span className="copy-card ui-zoom">
-      <span className="copy-check" aria-hidden="true">
-        <svg viewBox="0 0 20 20" width="18" height="18">
-          <circle className="ring" cx="10" cy="10" r="8.5" />
-          <path className="tick" d="M6 10.4l2.6 2.6L14.2 7.4" />
-        </svg>
+      <span className="copy-logo" aria-hidden="true">
+        <img src="/mooncli.svg" alt="" draggable={false} />
       </span>
       <span className="copy-text">
         <strong>已复制</strong>

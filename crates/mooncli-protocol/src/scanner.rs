@@ -45,6 +45,11 @@ pub enum ShellEvent {
     AltScreen {
         on: bool,
     },
+    /// 括号粘贴模式开关（`CSI ? 2004 h/l`）。bash 5.1+、zsh、fish 在等待输入时打开、按回车后关掉，
+    /// 远程 shell 没装集成时靠它判断"在提示符上"还是"在运行命令"。
+    BracketedPaste {
+        on: bool,
+    },
     /// 带对 nonce 的私有序列，`data` 是解码后的 JSON。
     Private {
         kind: String,
@@ -221,6 +226,9 @@ impl Scanner {
         let alt = params.split(|&c| c == b';').any(|p| matches!(p, b"1049" | b"1047" | b"47"));
         if alt {
             out.emit(ShellEvent::AltScreen { on });
+        }
+        if params.split(|&c| c == b';').any(|p| p == b"2004") {
+            out.emit(ShellEvent::BracketedPaste { on });
         }
     }
 
@@ -494,6 +502,8 @@ mod tests {
         let o = scan(None, &[b"\x1b[?1049h", b"vim", b"\x1b[?25;1049l"]);
         assert_eq!(o.events, vec![ShellEvent::AltScreen { on: true }, ShellEvent::AltScreen { on: false }]);
         assert_eq!(o.passthrough, b"\x1b[?1049hvim\x1b[?25;1049l");
+        let o = scan(None, &[b"\x1b[?20", b"04hbox$ ls\x1b[?2004l\r\n"]);
+        assert_eq!(o.events, vec![ShellEvent::BracketedPaste { on: true }, ShellEvent::BracketedPaste { on: false }]);
     }
 
     #[test]

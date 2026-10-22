@@ -8,13 +8,13 @@
 
 > 当前状态：早期开发中，日常能用，智能功能陆续加入。进度见 [docs/09](docs/09-roadmap.md#当前进度)。
 >
-> **下载**：[mooncli-setup-x64.exe](https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe)（每次推送自动更新）。安装包暂未签名，Windows 可能会提示"未知发布者"，原因和解决办法见 [docs/10](docs/10-release.md)。
+> **下载**：[mooncli-setup-x64.exe](https://github.com/moonmxi/mooncli/releases/download/nightly/mooncli-setup-x64.exe)（每次推送自动更新的预览版）。正式版本在 [Releases](https://github.com/moonmxi/mooncli/releases) 页面，正在申请 SignPath 的开源免费签名，签好之前 Windows 可能会提示"未知发布者"，见 [docs/10](docs/10-release.md) 和下面的[代码签名政策](#代码签名政策--code-signing-policy)。
 
 ## 主要特点（计划中）
 
 - **浅色优先的外观系统**：内置 4 套浅色主题 + 1 套深色主题，颜色全部过了对比度检查；字体、配色、背景图、窗口材质（Mica / 亚克力）都能改。
-- **命令记忆**：自带历史库，记录命令在哪个目录、成没成功、跑了多久；快捷键唤出全部历史（可去重），也能唤出"当前输了一半的命令"的所有候选，并可把候选面板常驻在侧边。
-- **流畅的手感**：GPU 渲染、平滑滚动、智能复制粘贴；ssh 到远程后按键原样透传，TAB 补全不会失灵。
+- **命令记忆**：自带历史库，记录命令在哪个目录、哪台主机、成没成功、跑了多久；`Ctrl+Shift+R` 打开历史面板，可按目录、标签页、收藏、成败、主机筛选，可去重，也能唤出"当前输了一半的命令"的所有候选，并可把候选面板常驻在侧边。
+- **流畅的手感**：GPU 渲染、平滑滚动、智能复制粘贴；ssh 到远程后按键原样透传，TAB 补全不会失灵；连上服务器就算这条命令完成，之后在服务器上执行的每条命令也会单独计时、记进历史。
 - **会看内容的标签页**：标签栏可放左侧或顶部；自动显示目录、正在跑的程序；沿用 Claude Code / Codex 自己设置的标题和对应图标；Agent 等你确认时标签会提醒。
 - **Agent 用量小窗**：用 Claude Code 和 Codex 官方提供的扩展点和它们自己写在本机的数据，实时显示 5 小时额度、周额度和上下文占用。
 
@@ -70,3 +70,27 @@ cargo test          # 核心库测试；装了 pwsh 时会在真实 pwsh 里跑�
 - [tools/check_contrast.py](tools/check_contrast.py)：主题对比度检查，规则在 [resources/contrast-rules.json](resources/contrast-rules.json)
 - [tools/tune_palette.py](tools/tune_palette.py)：按规则自动微调主题的 16 色
 - [tools/fetch_conpty.py](tools/fetch_conpty.py)：下载安装包附带的新版 ConPTY
+
+## 代码签名政策 / Code signing policy
+
+正式版本的安装包计划由 SignPath 免费签名（开源项目计划，申请中）：
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- 只签由本仓库源码、在 GitHub Actions 上构建出来的安装包；每次签名都要由下面的"批准人"在 SignPath 上手动批准。
+- 团队角色：
+  - 提交者与审阅者（Committers and reviewers）：[moonmxi](https://github.com/moonmxi)
+  - 批准人（Approvers）：[moonmxi](https://github.com/moonmxi)
+- 每日构建（`nightly`）不签名。
+
+## 隐私 / Privacy
+
+除非你明确要求，mooncli 不会把任何信息发送到其它联网系统。命令历史、设置、背景图都只保存在你自己的电脑上。
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+安装时如果电脑上没有 WebView2 运行库，安装程序会从微软下载它（受[微软隐私声明](https://privacy.microsoft.com/privacystatement)约束）。
+
+## 许可证
+
+[MIT](LICENSE)。附带的第三方组件：Symbols Nerd Font（MIT，`app/public/fonts/`）、微软 ConPTY（MIT，打包时下载）。
