@@ -20,10 +20,15 @@ use crate::files;
 const LIVE_INTERVAL_CODEX: i64 = 120;
 const LIVE_INTERVAL_CLAUDE: i64 = 300;
 const LIVE_INTERVAL_ACTIVE: i64 = 90;
+/// Claude Code 的额度接口查得太勤会限流（`/usage` 只回一句"暂时拿不到"），跑着的时候也只三分钟一次
+const LIVE_INTERVAL_ACTIVE_CLAUDE: i64 = 180;
 /// Agent 刚有动静（一轮结束、状态栏刷新）时立刻重查，但两次之间至少隔这么久（秒）
 const LIVE_MIN_GAP: i64 = 30;
+const LIVE_MIN_GAP_CLAUDE: i64 = 120;
 /// 失败后隔多久再试（秒）：没装、没登录时别反复起进程
 const LIVE_RETRY_AFTER_ERROR: i64 = 600;
+/// 偶发的失败（额度接口临时限流、网络抖一下）很快再试：第一次失败 1 分钟后、第二次 5 分钟后，之后才隔 10 分钟
+const LIVE_RETRY_STEPS: [i64; 2] = [60, 300];
 /// spool 文件多久没更新就清掉（秒）
 const SPOOL_KEEP: i64 = 7 * 86_400;
 
@@ -55,6 +60,8 @@ struct LiveSlot {
     /// 上次开始查询的时刻（epoch 秒）
     last_try: i64,
     last_error: Option<String>,
+    /// 连着失败了几次（成功一次就清零）
+    failures: usize,
     in_flight: bool,
     /// 上次查询时看到的 spool 最新修改时刻：变了说明 Agent 又跑完了一轮
     seen_activity: i64,
@@ -188,16 +195,17 @@ fn maybe_refresh(
             return None;
         }
         let interval = if slot.last_error.is_some() {
-            LIVE_RETRY_AFTER_ERROR
+            LIVE_RETRY_STEPS.get(slot.failures.saturating_sub(1)).copied().unwrap_or(LIVE_RETRY_AFTER_ERROR)
         } else if active {
-            LIVE_INTERVAL_ACTIVE
+            if kind == AgentKind::Claude { LIVE_INTERVAL_ACTIVE_CLAUDE } else { LIVE_INTERVAL_ACTIVE }
         } else if kind == AgentKind::Claude {
             LIVE_INTERVAL_CLAUDE
         } else {
             LIVE_INTERVAL_CODEX
         };
         let since = now - slot.last_try;
-        let fresh_activity = activity > slot.seen_activity && since >= LIVE_MIN_GAP;
+        let gap = if kind == AgentKind::Claude { LIVE_MIN_GAP_CLAUDE } else { LIVE_MIN_GAP };
+        let fresh_activity = activity > slot.seen_activity && since >= gap;
         if !force && since < interval && !fresh_activity {
             return None;
         }
@@ -228,11 +236,13 @@ fn store_live(agent: &AgentState, kind: AgentKind, result: Result<AccountUsage, 
         Ok(a) => {
             slot.account = Some(a);
             slot.last_error = None;
+            slot.failures = 0;
             Ok(())
         }
         // 上次查到的留着（卡片会标出那是几点的数据），只记下这次的失败原因
         Err(e) => {
             slot.last_error = Some(e.clone());
+            slot.failures += 1;
             Err(e)
         }
     }

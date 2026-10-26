@@ -55,8 +55,17 @@ function staleText(updatedAt: number, nowSec: number): string | null {
   return sameDay ? `${time} 的数据` : `${d.getMonth() + 1}/${d.getDate()} ${time} 的数据`;
 }
 
-function AgentBlock({ kind, account, nowSec, missing, busy }: { kind: AgentKind; account?: AgentAccountUsage; nowSec: number; missing: string; busy: boolean }) {
+/** 所有窗口都已经过了重置时刻：这份数据只剩"那时用了多少"，已经说明不了现在 */
+function expired(a: AgentAccountUsage, nowSec: number): boolean {
+  const windows = [a.fiveHour, a.sevenDay].filter((w): w is RateWindow => !!w);
+  return windows.length > 0 && windows.every((w) => w.resetsAt !== undefined && w.resetsAt <= nowSec);
+}
+
+function AgentBlock({ kind, account: raw, nowSec, missing, busy }: { kind: AgentKind; account?: AgentAccountUsage; nowSec: number; missing: string; busy: boolean }) {
+  const old = raw && expired(raw, nowSec) ? raw : undefined;
+  const account = old ? undefined : raw;
   const stale = account ? staleText(account.updatedAt, nowSec) : null;
+  const note = busy ? "正在向它要额度…" : old ? `${missing}（之前的数据停在 ${staleText(old.updatedAt, nowSec) ?? "刚才"}，窗口都已重置）` : missing;
   return (
     <div className="aw-agent">
       <div className="aw-agent-head">
@@ -72,7 +81,7 @@ function AgentBlock({ kind, account, nowSec, missing, busy }: { kind: AgentKind;
           <WindowRow name="7 天" w={account.sevenDay} nowSec={nowSec} />
         </>
       ) : (
-        <div className="aw-note">{busy ? "正在向它要额度…" : missing}</div>
+        <div className="aw-note">{note}</div>
       )}
     </div>
   );

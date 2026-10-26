@@ -79,19 +79,27 @@ pub fn fetch(exe: &Path, work_dir: &Path, timeout: Duration) -> Result<AccountUs
             return Err("claude /usage 响应超时".into());
         }
     };
+    // 原样留一份最近的输出，额度对不上时可以打开看 Claude Code 实际说了什么
+    let _ = std::fs::write(work_dir.join("last-usage.json"), &output.stdout);
     let v: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| "claude /usage 的输出不是 JSON（版本太旧？）".to_string())?;
     let text = v.get("result").and_then(Value::as_str).unwrap_or("");
     if v.get("is_error").and_then(Value::as_bool) == Some(true) {
         return Err(format!("claude /usage 出错：{}", first_line(text)));
     }
-    parse_usage(text, now_epoch()).ok_or_else(|| {
-        if text.contains("API") {
-            "这个账号用的是 API key，没有订阅额度".into()
-        } else {
-            "没有在 /usage 的结果里找到额度".into()
-        }
-    })
+    parse_usage(text, now_epoch()).ok_or_else(|| explain(text))
+}
+
+/// 没解析出额度时，把 Claude Code 实际说的那句话带出来（常见的是额度接口暂时限流、拿不到数据）
+fn explain(text: &str) -> String {
+    if text.contains("API Usage Billing") || text.contains("API key") {
+        return "这个账号用的是 API key，没有订阅额度".into();
+    }
+    let said = text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("You are currently using"));
+    match said {
+        Some(s) => format!("Claude Code 这次没给额度：{}", s.chars().take(80).collect::<String>()),
+        None => "Claude Code 这次没有给出额度，稍后会再查".into(),
+    }
 }
 
 fn kill_pid(pid: u32) {
@@ -246,6 +254,17 @@ mod tests {
         assert_eq!(parse_reset("Dec 30, 12am", now), Some(local(2026, 12, 30, 0, 0)));
         assert_eq!(parse_reset("Dec 31", now), Some(local(2026, 12, 31, 0, 0)));
         assert_eq!(parse_reset("someday", now), None);
+    }
+
+    #[test]
+    fn explains_what_claude_said() {
+        assert_eq!(
+            explain(
+                "You are currently using your subscription\n\nUsage data is temporarily unavailable. Try again later."
+            ),
+            "Claude Code 这次没给额度：Usage data is temporarily unavailable. Try again later."
+        );
+        assert_eq!(explain(""), "Claude Code 这次没有给出额度，稍后会再查");
     }
 
     #[test]
