@@ -68,6 +68,17 @@ pub fn list_entries(agent_dir: &Path, prefix: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// 某几类 spool 文件里最新的修改时刻（epoch 秒）：主进程据此判断 Agent 刚有动静（一轮结束、状态栏刷新），
+/// 好立刻重查额度。没有文件时为 0。
+pub fn latest_mtime(agent_dir: &Path, prefixes: &[&str]) -> i64 {
+    prefixes
+        .iter()
+        .flat_map(|p| list_entries(agent_dir, p))
+        .filter_map(|p| crate::timeutil::file_mtime_epoch(&p))
+        .max()
+        .unwrap_or(0)
+}
+
 /// 清掉很久没更新的 spool 文件（会话早就结束了），免得目录越攒越多。返回删掉的个数。
 pub fn prune(agent_dir: &Path, older_than_secs: i64, now: i64) -> usize {
     let mut n = 0;

@@ -10,6 +10,7 @@
 //! 绝不读取任何凭证，mooncli 自己不发网络请求。
 
 pub mod claude;
+pub mod claude_usage;
 pub mod codex;
 pub mod codex_live;
 pub mod integrate;
@@ -54,18 +55,19 @@ pub struct Focus {
 }
 
 /// 采集额度与当前会话。任何一处读不到都只会让对应部分为空，不报错。
-/// `live` 是主进程缓存的实时额度（codex app-server 查到的），比文件里的快照新时替换它。
+/// `live` 是主进程查到的额度（`claude /usage`、codex app-server）；每个 Agent 在实时查询、
+/// 扩展点送来的、会话文件里的几份数据中取最新的一份——一轮对话刚结束时文件里的往往比上次查询新。
 pub fn collect(opts: &CollectOptions, live: &[AccountUsage], focus: Option<&Focus>) -> UsageReport {
-    let mut accounts = Vec::new();
-    accounts.extend(claude::latest_account(&opts.agent_dir));
-    let codex_live = live.iter().find(|a| a.kind == AgentKind::Codex);
-    // 实时额度在手就不必翻会话文件
-    let codex_file = if codex_live.is_some() { None } else { codex::latest_account(&opts.codex_homes) };
-    match (codex_live, codex_file) {
-        (Some(l), _) => accounts.push(l.clone()),
-        (None, Some(f)) => accounts.push(f),
-        (None, None) => {}
-    }
+    let freshest =
+        |candidates: Vec<Option<AccountUsage>>| candidates.into_iter().flatten().max_by_key(|a| a.updated_at);
+    let live_of = |kind: AgentKind| live.iter().find(|a| a.kind == kind).cloned();
+    let accounts = [
+        freshest(vec![live_of(AgentKind::Claude), claude::latest_account(&opts.agent_dir)]),
+        freshest(vec![live_of(AgentKind::Codex), codex::latest_account(&opts.codex_homes)]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let current = focus.map(|f| match f.kind {
         AgentKind::Claude => claude::current(&opts.claude_dir, &opts.agent_dir, f),
         AgentKind::Codex => codex::current(&opts.codex_homes, &opts.agent_dir, f),
@@ -96,6 +98,22 @@ mod tests {
         .unwrap();
         let r = collect(&opts, std::slice::from_ref(&live), None);
         assert_eq!(r.accounts, vec![live.clone()]);
+        // 会话文件里有更新的快照时用文件里的
+        let day = dir.path().join("codex").join("sessions").join("2026").join("10").join("26");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join("rollout-x.jsonl"),
+            concat!(
+                r#"{"type":"session_meta","payload":{"id":"x","cwd":"C:\\w"}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":9.5,"window_minutes":300}}}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let r = collect(&opts, std::slice::from_ref(&live), None);
+        assert_eq!(r.accounts[0].five_hour.as_ref().unwrap().used_percent, 9.5);
+        assert_eq!(r.accounts[0].source, SnapshotSource::SessionFile);
         assert!(r.current.is_none());
         let focus = Focus { kind: AgentKind::Codex, tab_id: "t".into(), cwd: None, since: 0 };
         let r = collect(&opts, &[live], Some(&focus));

@@ -4,11 +4,13 @@ mod filter;
 mod import;
 mod index;
 mod search;
+mod service;
 mod store;
 
 pub use filter::Filter;
 pub use import::parse_psreadline_history;
 pub use search::{Hit, Query, Scope, Sort};
+pub use service::{HistoryService, Page, PageResult, SUPERSEDED};
 pub use store::{CommandRecord, HostCount, Run, Source, Store, Summary};
 
 #[derive(Debug, thiserror::Error)]

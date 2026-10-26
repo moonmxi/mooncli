@@ -453,7 +453,8 @@ export function demoBackend(): Backend {
               updatedAt: now - 5,
             }
           : null,
-        claudeIntegrated: true,
+        liveErrors: {},
+        refreshing: [],
       } satisfies UsageReport;
     },
     agentRefreshLive: async () => {},
@@ -475,6 +476,10 @@ export function demoBackend(): Backend {
     },
     historySearch: async (text, opts) => demoQuery({ text, limit: opts?.limit ?? 50 }),
     historyQuery: async (q) => demoQuery(q),
+    historyPage: async (q, _lane, offset, limit) => {
+      const all = demoQuery({ ...q, limit: 1_000_000 });
+      return { hits: all.slice(offset, offset + limit), total: all.length, hasMore: offset + limit < all.length, partial: false };
+    },
     async historyDetail(text) {
       const runs = demoHistory.filter((r) => r.text === text);
       const durations = runs.map((r) => r.duration).filter((d): d is number => d !== null);

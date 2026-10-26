@@ -1,11 +1,12 @@
 // Agent 额度卡片（docs/07 第 5 节）：固定列出 Claude Code 和 Codex 各自的 5 小时、7 天额度；
 // 当前标签页正在跑其中一个时，再加一行这个会话的上下文占用。三种形态共用一张卡片：
 //   浮动卡片（可拖动，松手吸附到最近的角）、状态栏一段（StatusSegment）、独立置顶小窗（AgentWindowView）。
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentAccountUsage, AgentKind, Backend, RateWindow } from "../backend/types";
 import { accountFor, compactSummary, formatResetIn, formatTokens, KIND_LABEL, KINDS, levelOf, shownPercent, worstPercent, type Level } from "../agent/usage";
 import { refreshUsage, useUsage } from "../agent/store";
 import { useSettings, type AppSettings } from "../state/settings";
+import { Icon } from "./Icons";
 import { useUi } from "../state/ui";
 
 type Anchor = AppSettings["agent"]["widget"]["anchor"];
@@ -54,7 +55,7 @@ function staleText(updatedAt: number, nowSec: number): string | null {
   return sameDay ? `${time} 的数据` : `${d.getMonth() + 1}/${d.getDate()} ${time} 的数据`;
 }
 
-function AgentBlock({ kind, account, nowSec, missing }: { kind: AgentKind; account?: AgentAccountUsage; nowSec: number; missing: string }) {
+function AgentBlock({ kind, account, nowSec, missing, busy }: { kind: AgentKind; account?: AgentAccountUsage; nowSec: number; missing: string; busy: boolean }) {
   const stale = account ? staleText(account.updatedAt, nowSec) : null;
   return (
     <div className="aw-agent">
@@ -63,7 +64,7 @@ function AgentBlock({ kind, account, nowSec, missing }: { kind: AgentKind; accou
           {KIND_LABEL[kind]}
           {account?.plan && <span className="aw-plan">{account.plan}</span>}
         </span>
-        {stale && <span className="aw-stale">{stale}</span>}
+        {busy ? <span className="aw-stale">查询中…</span> : stale && <span className="aw-stale">{stale}</span>}
       </div>
       {account ? (
         <>
@@ -71,8 +72,80 @@ function AgentBlock({ kind, account, nowSec, missing }: { kind: AgentKind; accou
           <WindowRow name="7 天" w={account.sevenDay} nowSec={nowSec} />
         </>
       ) : (
-        <div className="aw-note">{missing}</div>
+        <div className="aw-note">{busy ? "正在向它要额度…" : missing}</div>
       )}
+    </div>
+  );
+}
+
+/** 卡片上的调节面板：透明度、大小、停靠角 */
+function CardControls({ onClose }: { onClose(): void }) {
+  const widget = useSettings((s) => s.settings.agent.widget);
+  const update = useSettings((s) => s.update);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      const t = e.target as Element;
+      if (ref.current && !ref.current.contains(t) && !t.closest?.(".aw-tune")) onClose();
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [onClose]);
+  const sizes: [number, string][] = [
+    [0.85, "小"],
+    [1, "中"],
+    [1.2, "大"],
+  ];
+  const corners: [Anchor, string][] = [
+    ["top-left", "↖"],
+    ["top-right", "↗"],
+    ["bottom-left", "↙"],
+    ["bottom-right", "↘"],
+  ];
+  return (
+    <div className="aw-panel" ref={ref} onPointerDown={(e) => e.stopPropagation()}>
+      <label className="aw-panel-row">
+        <span>不透明度</span>
+        <input
+          type="range"
+          min={40}
+          max={100}
+          step={5}
+          value={Math.round(widget.opacity * 100)}
+          onChange={(e) => update((d) => (d.agent.widget.opacity = Number(e.target.value) / 100))}
+        />
+        <span className="aw-panel-val">{Math.round(widget.opacity * 100)}%</span>
+      </label>
+      <div className="aw-panel-row">
+        <span>大小</span>
+        <span className="aw-seg">
+          {sizes.map(([v, label]) => (
+            <button key={v} type="button" className={Math.abs(widget.scale - v) < 0.01 ? "on" : ""} onClick={() => update((d) => (d.agent.widget.scale = v))}>
+              {label}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="aw-panel-row">
+        <span>位置</span>
+        <span className="aw-seg">
+          {corners.map(([v, label]) => (
+            <button key={v} type="button" title={v} className={widget.anchor === v ? "on" : ""} onClick={() => update((d) => (d.agent.widget.anchor = v))}>
+              {label}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="aw-panel-foot">
+        <button type="button" className="link-btn" onClick={() => useUi.getState().openSettings("agent")}>
+          更多设置
+        </button>
+      </div>
     </div>
   );
 }
@@ -81,15 +154,19 @@ interface CardProps {
   backend: Backend;
   /** 卡片头部可拖动（浮动形态） */
   onDragStart?: (e: React.PointerEvent) => void;
+  /** 浮动形态：头部显示调节和隐藏按钮 */
+  floating?: boolean;
 }
 
 /** 卡片本体：各形态共用 */
-export function UsageCard({ backend, onDragStart }: CardProps) {
+export function UsageCard({ backend, onDragStart, floating }: CardProps) {
   const report = useUsage((s) => s.report);
   const fetchedAt = useUsage((s) => s.fetchedAt);
   const refreshing = useUsage((s) => s.refreshing);
   const { warnAt, dangerAt } = useSettings((s) => s.settings.agent.widget);
   const liveQuota = useSettings((s) => s.settings.agent.liveQuota);
+  const [tuning, setTuning] = useState(false);
+  const closeTuning = useCallback(() => setTuning(false), []);
   const [, tick] = useState(0);
   // 倒计时每 30 秒走一次，不等数据轮询
   useEffect(() => {
@@ -97,35 +174,55 @@ export function UsageCard({ backend, onDragStart }: CardProps) {
     return () => clearInterval(t);
   }, []);
   const nowSec = Math.floor(Math.max(Date.now(), fetchedAt) / 1000);
+  const errors = report?.liveErrors ?? {};
   const missing: Record<AgentKind, string> = {
-    claude: report?.claudeIntegrated
-      ? "等 Claude Code 下一次回复后显示（Pro / Max 订阅才有额度）"
-      : "接入 Claude Code 后显示（设置 → Agent）",
-    codex: report?.liveError ? `没查到：${report.liveError}` : "还没有 Codex 的额度数据",
+    claude: errors.claude ?? (liveQuota ? "还没有数据" : "打开「主动查询额度」后显示（设置 → Agent）"),
+    codex: errors.codex ?? (liveQuota ? "还没有数据" : "还没有 Codex 的额度数据"),
   };
   const current = report?.current;
   const ctx = current?.context;
   const ctxLevel = ctx ? levelOf(ctx.usedPercent / 100, warnAt, dangerAt) : "ok";
+  const stop = (e: React.PointerEvent) => e.stopPropagation();
 
   return (
     <>
       <header className={`aw-head${onDragStart ? " draggable" : ""}`} onPointerDown={onDragStart}>
         <strong>Agent 额度</strong>
-        {liveQuota && (
-          <button
-            type="button"
-            className="aw-refresh"
-            disabled={refreshing}
-            title={report?.liveError ? `上次查询失败：${report.liveError}` : "通过 codex app-server 重新查询 Codex 额度"}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => refreshUsage(backend).then((err) => err && useUi.getState().showNotice(`刷新额度失败：${err}`))}
-          >
-            {refreshing ? "查询中…" : "刷新"}
-          </button>
-        )}
+        <span className="aw-tools">
+          {liveQuota && (
+            <button
+              type="button"
+              className={`aw-tool${refreshing ? " spin" : ""}`}
+              disabled={refreshing}
+              title="立刻重查 Claude Code 和 Codex 的额度"
+              onPointerDown={stop}
+              onClick={() => refreshUsage(backend).then((err) => err && useUi.getState().showNotice(`刷新额度：${err}`))}
+            >
+              <Icon name="refresh" size={14} />
+            </button>
+          )}
+          {floating && (
+            <>
+              <button type="button" className={`aw-tool aw-tune${tuning ? " on" : ""}`} title="透明度、大小、位置" onPointerDown={stop} onClick={() => setTuning((v) => !v)}>
+                <Icon name="sliders" size={14} />
+              </button>
+              <button type="button" className="aw-tool" title="隐藏卡片（点状态栏的额度或在命令面板里再打开）" onPointerDown={stop} onClick={() => useUi.getState().setAgentHidden(true)}>
+                <Icon name="close" size={14} />
+              </button>
+            </>
+          )}
+        </span>
       </header>
+      {tuning && <CardControls onClose={closeTuning} />}
       {KINDS.map((kind) => (
-        <AgentBlock key={kind} kind={kind} account={accountFor(report, kind)} nowSec={nowSec} missing={missing[kind]} />
+        <AgentBlock
+          key={kind}
+          kind={kind}
+          account={accountFor(report, kind)}
+          nowSec={nowSec}
+          missing={missing[kind]}
+          busy={!!report?.refreshing.includes(kind)}
+        />
       ))}
       {current && (
         <div className="aw-current">
@@ -202,10 +299,10 @@ export function AgentWidget({ backend }: { backend: Backend }) {
       ref={ref}
       className={`agent-widget${drag ? " dragging" : ""}`}
       data-anchor={drag ? undefined : widget.anchor}
-      style={{ opacity: widget.opacity, ...(drag ? { left: drag.x, top: drag.y } : {}) }}
+      style={{ opacity: widget.opacity, ["--aw-scale" as string]: widget.scale, ...(drag ? { left: drag.x, top: drag.y } : {}) }}
       aria-label="Agent 额度"
     >
-      <UsageCard backend={backend} onDragStart={onDragStart} />
+      <UsageCard backend={backend} onDragStart={onDragStart} floating />
     </section>
   );
 }
@@ -226,7 +323,11 @@ export function StatusSegment() {
       type="button"
       className={`status-btn status-agent ${levelOf(worstPercent(report.accounts, nowSec) / 100, warnAt, dangerAt)}`}
       title={settings.agent.widget.style === "floating" ? "Agent 额度（5 小时 · 7 天），点击显示 / 隐藏卡片" : "Agent 额度（5 小时 · 7 天）"}
-      onClick={() => useUi.getState().toggleAgentHidden()}
+      onClick={() => {
+        // 浮动卡片设成不显示时，点状态栏直接打开它
+        if (settings.agent.widget.style !== "floating") useSettings.getState().update((d) => (d.agent.widget.style = "floating"));
+        else useUi.getState().toggleAgentHidden();
+      }}
     >
       {text}
     </button>

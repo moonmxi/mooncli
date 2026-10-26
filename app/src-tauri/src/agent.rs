@@ -15,10 +15,14 @@ use tauri::{Emitter, Manager, State};
 use crate::AppState;
 use crate::files;
 
-/// 实时额度多久查一次（秒）。app-server 每次要起一个 Codex 进程（约 3–5 秒 CPU），不宜太勤；
-/// 额度窗口按小时计，两分钟足够新。
-const LIVE_INTERVAL: i64 = 120;
-/// 连续失败后隔多久再试（秒）：没装 Codex、没登录时别反复起进程
+/// 多久主动查一次额度（秒）。每次都要起一个 Claude Code / Codex 进程（几秒 CPU），不宜太勤：
+/// 平时 Codex 两分钟、Claude Code 五分钟；当前标签页正在跑这个 Agent 时一分半。
+const LIVE_INTERVAL_CODEX: i64 = 120;
+const LIVE_INTERVAL_CLAUDE: i64 = 300;
+const LIVE_INTERVAL_ACTIVE: i64 = 90;
+/// Agent 刚有动静（一轮结束、状态栏刷新）时立刻重查，但两次之间至少隔这么久（秒）
+const LIVE_MIN_GAP: i64 = 30;
+/// 失败后隔多久再试（秒）：没装、没登录时别反复起进程
 const LIVE_RETRY_AFTER_ERROR: i64 = 600;
 /// spool 文件多久没更新就清掉（秒）
 const SPOOL_KEEP: i64 = 7 * 86_400;
@@ -30,12 +34,38 @@ pub struct AgentState {
 
 #[derive(Default)]
 struct LiveCache {
-    accounts: Vec<AccountUsage>,
+    claude: LiveSlot,
+    codex: LiveSlot,
+    pruned_at: i64,
+}
+
+impl LiveCache {
+    fn slot(&mut self, kind: AgentKind) -> &mut LiveSlot {
+        match kind {
+            AgentKind::Claude => &mut self.claude,
+            AgentKind::Codex => &mut self.codex,
+        }
+    }
+}
+
+/// 一个 Agent 的主动查询状态
+#[derive(Default)]
+struct LiveSlot {
+    account: Option<AccountUsage>,
     /// 上次开始查询的时刻（epoch 秒）
     last_try: i64,
     last_error: Option<String>,
     in_flight: bool,
-    pruned_at: i64,
+    /// 上次查询时看到的 spool 最新修改时刻：变了说明 Agent 又跑完了一轮
+    seen_activity: i64,
+}
+
+/// 哪些 spool 文件的变化算这个 Agent「刚有动静」
+fn activity_prefixes(kind: AgentKind) -> &'static [&'static str] {
+    match kind {
+        AgentKind::Claude => &["claude-hook-", "claude-status-"],
+        AgentKind::Codex => &["codex-notify-"],
+    }
 }
 
 /// mooncli 的 agent 数据目录：data/agent（bridge 的 spool、提醒与 bridge-config 在这里）。
@@ -55,107 +85,157 @@ pub struct FocusArg {
     since_ms: i64,
 }
 
+#[derive(Serialize, Default)]
+pub struct LiveErrors {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    claude: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageResponse {
     pub accounts: Vec<AccountUsage>,
     pub current: Option<CurrentSession>,
-    /// 实时额度最近一次查询失败的原因（成功或没开时为空）
-    pub live_error: Option<String>,
-    /// Claude Code 接入了 statusLine 没有（没接入就拿不到它的额度，卡片上给出提示）
-    pub claude_integrated: bool,
+    /// 各 Agent 最近一次主动查询失败的原因（成功或没开时为空）
+    pub live_errors: LiveErrors,
+    /// 正在查询的 Agent（卡片上显示「查询中」）
+    pub refreshing: Vec<AgentKind>,
 }
 
 /// 采集两个 Agent 的额度，以及当前标签页里正在跑的那个会话的上下文。
-/// 顺手在后台刷新 Codex 实时额度（到点了才刷），本次先用缓存，下一轮轮询就能拿到新的。
+/// 顺手在后台按需重查额度（到点了、或 Agent 刚跑完一轮），本次先用缓存，下一轮轮询就能拿到新的。
+/// 异步命令：读文件、扫目录都在后台线程里做，界面线程不等。
 #[tauri::command]
-pub fn agent_usage(state: State<'_, AppState>, focus: Option<FocusArg>) -> UsageResponse {
+pub async fn agent_usage(app: tauri::AppHandle, focus: Option<FocusArg>) -> Result<UsageResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || usage_now(&app.state::<AppState>(), focus))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn usage_now(state: &AppState, focus: Option<FocusArg>) -> UsageResponse {
     let settings = state.typed_settings();
-    let dir = agent_dir(&state);
+    let dir = agent_dir(state);
     if settings.agent.live_quota {
-        maybe_refresh_live(&state, settings.agent.codex_path.clone());
+        for kind in [AgentKind::Claude, AgentKind::Codex] {
+            let active = focus.as_ref().is_some_and(|f| f.kind == kind);
+            maybe_refresh(state, kind, active, false);
+        }
     }
-    let (live, live_error) = {
+    let (live, live_errors, refreshing) = {
         let mut cache = state.agent.live.lock().unwrap();
         let now = now_epoch();
         if now - cache.pruned_at > 3600 {
             cache.pruned_at = now;
             mooncli_agent::spool::prune(&dir, SPOOL_KEEP, now);
         }
-        if settings.agent.live_quota { (cache.accounts.clone(), cache.last_error.clone()) } else { (Vec::new(), None) }
+        if settings.agent.live_quota {
+            let live: Vec<AccountUsage> =
+                [&cache.claude, &cache.codex].iter().filter_map(|s| s.account.clone()).collect();
+            let errors = LiveErrors { claude: cache.claude.last_error.clone(), codex: cache.codex.last_error.clone() };
+            let refreshing = [(AgentKind::Claude, &cache.claude), (AgentKind::Codex, &cache.codex)]
+                .into_iter()
+                .filter(|(_, s)| s.in_flight)
+                .map(|(k, _)| k)
+                .collect();
+            (live, errors, refreshing)
+        } else {
+            (Vec::new(), LiveErrors::default(), Vec::new())
+        }
     };
     // 标签页记的开始时刻和 Agent 真正写下第一条记录之间可能差一点，放宽几秒
     let focus = focus.map(|f| Focus { kind: f.kind, tab_id: f.tab_id, cwd: f.cwd, since: f.since_ms / 1000 - 5 });
     let report = mooncli_agent::collect(&CollectOptions::defaults(dir), &live, focus.as_ref());
-    UsageResponse {
-        accounts: report.accounts,
-        current: report.current,
-        live_error,
-        claude_integrated: claude_integrated(),
-    }
+    UsageResponse { accounts: report.accounts, current: report.current, live_errors, refreshing }
 }
 
-/// 立刻重新查一次实时额度（卡片上的「刷新」）。查完才返回。
+/// 立刻重查两个 Agent 的额度（卡片上的「刷新」）。两个一起查，都查完才返回；有失败时返回原因。
 #[tauri::command]
 pub async fn agent_refresh_live(state: State<'_, AppState>) -> Result<(), String> {
-    let settings = state.typed_settings();
-    if !settings.agent.live_quota {
-        return Err("实时额度没有开启".into());
+    if !state.typed_settings().agent.live_quota {
+        return Err("主动查询额度没有开启（设置 → Agent）".into());
     }
-    let exe = mooncli_agent::codex_live::find_codex_exe(settings.agent.codex_path.as_deref())
-        .ok_or("没有找到 codex，可以在设置里指定位置")?;
-    {
-        let mut cache = state.agent.live.lock().unwrap();
-        if cache.in_flight {
-            return Ok(());
+    let handles: Vec<_> = [AgentKind::Claude, AgentKind::Codex]
+        .into_iter()
+        .filter_map(|kind| maybe_refresh(&state, kind, true, true).map(|h| (kind, h)))
+        .collect();
+    let mut errors = Vec::new();
+    for (kind, h) in handles {
+        let result = tauri::async_runtime::spawn_blocking(move || h.join()).await;
+        if let Ok(Ok(Err(e))) = result {
+            errors.push(format!("{}：{e}", if kind == AgentKind::Claude { "Claude Code" } else { "Codex" }));
         }
-        cache.in_flight = true;
-        cache.last_try = now_epoch();
     }
-    let result =
-        tauri::async_runtime::spawn_blocking(move || mooncli_agent::codex_live::fetch(&exe, Duration::from_secs(20)))
-            .await
-            .map_err(|e| e.to_string())?;
-    store_live(&state.agent, result)
+    if errors.is_empty() { Ok(()) } else { Err(errors.join("；")) }
 }
 
-fn store_live(agent: &AgentState, result: Result<AccountUsage, String>) -> Result<(), String> {
+/// 该查了就在后台线程里查一次，返回线程句柄；不该查（没到时间、正在查）返回 None。
+/// `force` 是用户点了刷新：不看间隔，只要没在查就查。
+fn maybe_refresh(
+    state: &AppState,
+    kind: AgentKind,
+    active: bool,
+    force: bool,
+) -> Option<std::thread::JoinHandle<Result<(), String>>> {
+    let now = now_epoch();
+    let dir = agent_dir(state);
+    let activity = mooncli_agent::spool::latest_mtime(&dir, activity_prefixes(kind));
+    {
+        let mut cache = state.agent.live.lock().unwrap();
+        let slot = cache.slot(kind);
+        if slot.in_flight {
+            return None;
+        }
+        let interval = if slot.last_error.is_some() {
+            LIVE_RETRY_AFTER_ERROR
+        } else if active {
+            LIVE_INTERVAL_ACTIVE
+        } else if kind == AgentKind::Claude {
+            LIVE_INTERVAL_CLAUDE
+        } else {
+            LIVE_INTERVAL_CODEX
+        };
+        let since = now - slot.last_try;
+        let fresh_activity = activity > slot.seen_activity && since >= LIVE_MIN_GAP;
+        if !force && since < interval && !fresh_activity {
+            return None;
+        }
+        slot.in_flight = true;
+        slot.last_try = now;
+        slot.seen_activity = activity;
+    }
+    let settings = state.typed_settings().agent;
+    let agent = state.agent.clone();
+    Some(std::thread::spawn(move || {
+        let result = match kind {
+            AgentKind::Codex => mooncli_agent::codex_live::find_codex_exe(settings.codex_path.as_deref())
+                .ok_or_else(|| "没有找到 codex，可以在设置里指定位置".to_string())
+                .and_then(|exe| mooncli_agent::codex_live::fetch(&exe, Duration::from_secs(20))),
+            AgentKind::Claude => mooncli_agent::claude_usage::find_claude_exe(settings.claude_path.as_deref())
+                .ok_or_else(|| "没有找到 claude，可以在设置里指定位置".to_string())
+                .and_then(|exe| mooncli_agent::claude_usage::fetch(&exe, &dir.join("probe"), Duration::from_secs(40))),
+        };
+        store_live(&agent, kind, result)
+    }))
+}
+
+fn store_live(agent: &AgentState, kind: AgentKind, result: Result<AccountUsage, String>) -> Result<(), String> {
     let mut cache = agent.live.lock().unwrap();
-    cache.in_flight = false;
+    let slot = cache.slot(kind);
+    slot.in_flight = false;
     match result {
         Ok(a) => {
-            cache.accounts.retain(|x| x.kind != a.kind);
-            cache.accounts.push(a);
-            cache.last_error = None;
+            slot.account = Some(a);
+            slot.last_error = None;
             Ok(())
         }
+        // 上次查到的留着（卡片会标出那是几点的数据），只记下这次的失败原因
         Err(e) => {
-            cache.last_error = Some(e.clone());
+            slot.last_error = Some(e.clone());
             Err(e)
         }
     }
-}
-
-fn maybe_refresh_live(state: &AppState, codex_path: Option<String>) {
-    let now = now_epoch();
-    {
-        let mut cache = state.agent.live.lock().unwrap();
-        let wait = if cache.last_error.is_some() { LIVE_RETRY_AFTER_ERROR } else { LIVE_INTERVAL };
-        if cache.in_flight || now - cache.last_try < wait {
-            return;
-        }
-        cache.in_flight = true;
-        cache.last_try = now;
-    }
-    let Some(exe) = mooncli_agent::codex_live::find_codex_exe(codex_path.as_deref()) else {
-        let _ = store_live(&state.agent, Err("没有找到 codex".into()));
-        return;
-    };
-    let agent = state.agent.clone();
-    std::thread::spawn(move || {
-        let result = mooncli_agent::codex_live::fetch(&exe, Duration::from_secs(20));
-        let _ = store_live(&agent, result);
-    });
 }
 
 // ---- 完成提醒 ------------------------------------------------------------------

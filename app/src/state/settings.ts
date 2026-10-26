@@ -57,9 +57,10 @@ export interface AppSettings {
   agent: {
     /** 额度卡片 */
     enabled: boolean;
-    /** 通过本机 Codex 的 app-server 实时查询额度 */
+    /** 主动查询额度：`claude -p /usage`、codex app-server */
     liveQuota: boolean;
-    /** codex 可执行文件的位置；null 时自动在 PATH 里找 */
+    /** claude / codex 可执行文件的位置；null 时自动在 PATH 里找 */
+    claudePath: string | null;
     codexPath: string | null;
     /** 完成提醒：一轮结束、要你确认时弹系统通知（要先接入 hooks / notify） */
     notify: { enabled: boolean; quietWhenFocused: boolean };
@@ -70,6 +71,8 @@ export interface AppSettings {
       statusBar: boolean;
       anchor: "bottom-right" | "bottom-left" | "top-right" | "top-left";
       opacity: number;
+      /** 卡片大小：0.85 小 / 1 中 / 1.2 大（在界面缩放的基础上再乘） */
+      scale: number;
       /** 进度条变警告色 / 危险色的阈值（0–1） */
       warnAt: number;
       dangerAt: number;
@@ -125,9 +128,10 @@ export const DEFAULTS: AppSettings = {
   agent: {
     enabled: false,
     liveQuota: true,
+    claudePath: null,
     codexPath: null,
     notify: { enabled: true, quietWhenFocused: true },
-    widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, warnAt: 0.7, dangerAt: 0.9 },
+    widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, scale: 1, warnAt: 0.7, dangerAt: 0.9 },
   },
   notifications: { taskbar: true, system: true },
   completion: { pinnedRequestsPwsh: false },
@@ -183,6 +187,8 @@ export function mergeSettings(saved: unknown, defaults: AppSettings = DEFAULTS):
   m.remote.connectCommands = m.remote.connectCommands.filter((c) => typeof c === "string" && /^[\w.-]{1,40}$/.test(c));
   // 侧栏形态的额度卡片去掉了，换成浮动卡片
   if ((m.agent.widget.style as string) === "sidebar") m.agent.widget.style = "floating";
+  m.agent.widget.opacity = clamp(m.agent.widget.opacity, 0.4, 1);
+  m.agent.widget.scale = clamp(m.agent.widget.scale, 0.7, 1.5);
   m.version = SETTINGS_VERSION;
   m.zoom = clamp(m.zoom, LIMITS.zoom.min, LIMITS.zoom.max);
   m.uiScale = clamp(m.uiScale, LIMITS.uiScale.min, LIMITS.uiScale.max);

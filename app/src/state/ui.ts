@@ -38,6 +38,7 @@ interface UiState {
   /** 用户点状态栏暂时收起了浮动的额度卡片 */
   agentHidden: boolean;
   toggleAgentHidden(): void;
+  setAgentHidden(on: boolean): void;
   showCopyToast(x: number, y: number, text: string): void;
   showNotice(text: string): void;
   openMenu(x: number, y: number, items: MenuEntry[]): void;
@@ -78,6 +79,9 @@ export const useUi = create<UiState>((set) => ({
   agentHidden: false,
   toggleAgentHidden() {
     set((s) => ({ agentHidden: !s.agentHidden }));
+  },
+  setAgentHidden(on) {
+    set({ agentHidden: on });
   },
   showCopyToast(x, y, text) {
     const lines = text.split(/\r?\n/).length;

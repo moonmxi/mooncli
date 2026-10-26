@@ -3,7 +3,7 @@
 //! 每次按键都在 SQLite 里对十万行做 GROUP BY 太慢（发布构建约 150ms），
 //! 所以按命令文本把统计信息汇总在内存里，写入时增量更新。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::CommandRecord;
 
@@ -41,6 +41,8 @@ pub(crate) struct Index {
     by_text: HashMap<String, usize>,
     pub entries: Vec<TextStats>,
     id_to_text: HashMap<i64, usize>,
+    /// 加进来时还没有退出码的记录：只有它们收到"结束"时才计成败，同一条结束消息来两次也不会重复算
+    open: HashSet<i64>,
 }
 
 impl Index {
@@ -72,6 +74,9 @@ impl Index {
             *e.cwds.entry(c.clone()).or_default() += 1;
         }
         Self::count_exit(e, rec.exit_code);
+        if rec.exit_code.is_none() {
+            self.open.insert(id);
+        }
         if let Some(h) = &rec.host {
             let pos = match e.hosts.iter().position(|x| &x.host == h) {
                 Some(p) => p,
@@ -110,9 +115,12 @@ impl Index {
         self.id_to_text.insert(id, i);
     }
 
-    /// 命令结束时补退出码。只对还没有退出码的记录调用。
+    /// 命令结束时补退出码。已经知道退出码的记录忽略。
     pub fn finish(&mut self, id: i64, exit: Option<i32>, duration_ms: i64) {
         let Some(&i) = self.id_to_text.get(&id) else { return };
+        if !self.open.remove(&id) {
+            return;
+        }
         let e = &mut self.entries[i];
         Self::count_exit(e, exit);
         if e.last_id == id {

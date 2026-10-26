@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use mooncli_config::Settings;
-use mooncli_history::{Hit, HostCount, Query, Run, Store, Summary};
+use mooncli_history::{Filter, HistoryService, Hit, HostCount, Page, Query, Run, Store, Summary};
 use mooncli_pty::Session;
 use mooncli_pty::shell::{
     LaunchRequest, ShellSpec, find_shell, find_windows_powershell, find_winget, install_pwsh_launch, launch,
@@ -31,7 +31,7 @@ struct SessionEntry {
 struct AppState {
     sessions: Mutex<HashMap<String, SessionEntry>>,
     shell: Mutex<Option<ShellSpec>>,
-    history: Arc<Mutex<Option<Store>>>,
+    history: Arc<Mutex<Option<HistoryService>>>,
     /// 界面保存的原样设置（JSON）。Rust 端只读其中自己用得到的字段。
     settings: Mutex<serde_json::Value>,
     settings_path: PathBuf,
@@ -205,18 +205,46 @@ fn session_close(state: State<'_, AppState>, id: String) {
 }
 
 // ---- 历史 --------------------------------------------------------------------
+//
+// 历史命令全部是异步命令：在后台线程里等历史库，界面线程一刻都不等（docs/04 §3"性能"）。
+// 搜索交给 HistoryService 的搜索线程，同一路只算最新的查询。
 
-#[tauri::command]
-fn history_search(state: State<'_, AppState>, query: Query) -> CmdResult<Vec<Hit>> {
-    let h = state.history.lock().unwrap();
-    let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
-    store.search(&query).map_err(err)
+impl AppState {
+    /// 历史库服务（还没打开完、或者关了历史功能时为 None）。克隆出来就放开锁，不会挡住终端写历史。
+    fn history_service(&self) -> Option<HistoryService> {
+        self.history.lock().unwrap().clone()
+    }
 }
 
-fn with_history<T>(state: &State<'_, AppState>, f: impl FnOnce(&Store) -> mooncli_history::Result<T>) -> CmdResult<T> {
-    let h = state.history.lock().unwrap();
-    let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
-    f(store).map_err(err)
+/// 在后台线程里用历史库做一件事
+async fn on_history<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    f: impl FnOnce(&HistoryService) -> mooncli_history::Result<T> + Send + 'static,
+) -> CmdResult<T> {
+    let svc = app.state::<AppState>().history_service().ok_or("历史库还在加载，请稍等")?;
+    tauri::async_runtime::spawn_blocking(move || f(&svc).map_err(err)).await.map_err(err)?
+}
+
+/// 搜一页。`lane` 区分是谁在搜（历史面板、补全面板、命令面板），同一路只算最新的查询；
+/// 被更新的查询顶掉时返回错误 "superseded"，界面忽略即可。
+#[tauri::command]
+async fn history_page(
+    app: tauri::AppHandle,
+    query: Query,
+    lane: String,
+    offset: usize,
+    limit: usize,
+) -> CmdResult<Page> {
+    let svc = app.state::<AppState>().history_service().ok_or("历史库还在加载，请稍等")?;
+    let rx = svc.search(&lane, query, offset, limit.clamp(1, 1000));
+    tauri::async_runtime::spawn_blocking(move || rx.recv().map_err(err)?).await.map_err(err)?
+}
+
+/// 简单搜索（补全面板、命令面板）：取前 `query.limit` 条
+#[tauri::command]
+async fn history_search(app: tauri::AppHandle, query: Query, lane: Option<String>) -> CmdResult<Vec<Hit>> {
+    let limit = query.limit;
+    history_page(app, query, lane.unwrap_or_else(|| "search".into()), 0, limit).await.map(|p| p.hits)
 }
 
 #[derive(Serialize)]
@@ -228,29 +256,29 @@ struct HistoryDetail {
 
 /// 一条命令的详情：汇总和最近 20 次执行
 #[tauri::command]
-fn history_detail(state: State<'_, AppState>, text: String) -> CmdResult<HistoryDetail> {
-    with_history(&state, |s| Ok(HistoryDetail { summary: s.summary(&text)?, runs: s.runs(&text, 20)? }))
+async fn history_detail(app: tauri::AppHandle, text: String) -> CmdResult<HistoryDetail> {
+    on_history(&app, move |s| Ok(HistoryDetail { summary: s.summary(&text)?, runs: s.runs(&text, 20)? })).await
 }
 
 #[tauri::command]
-fn history_hosts(state: State<'_, AppState>) -> CmdResult<Vec<HostCount>> {
-    with_history(&state, |s| s.hosts())
+async fn history_hosts(app: tauri::AppHandle) -> CmdResult<Vec<HostCount>> {
+    on_history(&app, |s| s.hosts()).await
 }
 
 #[tauri::command]
-fn history_favorite(state: State<'_, AppState>, text: String, on: bool) -> CmdResult<()> {
-    let now =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    with_history(&state, |s| s.set_favorite(&text, on, now))
+async fn history_favorite(app: tauri::AppHandle, text: String, on: bool) -> CmdResult<()> {
+    let now = now_ms();
+    on_history(&app, move |s| s.set_favorite(&text, on, now)).await
 }
 
 /// 删除一条命令的全部记录，或者（给了 id 时）只删那一次
 #[tauri::command]
-fn history_delete(state: State<'_, AppState>, text: String, id: Option<i64>) -> CmdResult<usize> {
-    with_history(&state, |s| match id {
+async fn history_delete(app: tauri::AppHandle, text: String, id: Option<i64>) -> CmdResult<usize> {
+    on_history(&app, move |s| match id {
         Some(id) => s.delete_id(id),
         None => s.delete_text(&text),
     })
+    .await
 }
 
 // ---- 设置 --------------------------------------------------------------------
@@ -354,7 +382,7 @@ fn replace_settings(
 
 #[tauri::command]
 fn data_overview(state: State<'_, AppState>) -> data::Overview {
-    let count = state.history.lock().unwrap().as_ref().and_then(|s| s.count().ok());
+    let count = state.history_service().and_then(|s| s.count().ok());
     data::overview(&state.data, count)
 }
 
@@ -380,9 +408,8 @@ fn settings_reset(state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
 fn data_export(state: State<'_, AppState>, include_history: bool, label: String) -> CmdResult<String> {
     let tmp = state.data.data_dir.join("export-history.tmp.db");
     let history = if include_history {
-        let h = state.history.lock().unwrap();
-        let store = h.as_ref().ok_or("历史库还在加载，请稍等")?;
-        store.backup_to(&tmp).map_err(err)?;
+        let svc = state.history_service().ok_or("历史库还在加载，请稍等")?;
+        svc.read(|s| s.backup_to(&tmp)).map_err(err)?;
         Some(tmp.as_path())
     } else {
         None
@@ -430,7 +457,7 @@ fn data_import(state: State<'_, AppState>, data_base64: String, include_history:
         (true, Some(h)) => {
             let tmp = state.data.data_dir.join("import-history.tmp.db");
             std::fs::write(&tmp, h).map_err(err)?;
-            let r = state.history.lock().unwrap().as_ref().map(|s| s.merge_from(&tmp));
+            let r = state.history_service().map(|svc| svc.modify(|s| s.merge_from(&tmp)));
             let _ = std::fs::remove_file(&tmp);
             Some(r.ok_or("历史库还在加载，请稍等")?.map_err(|e| format!("合并命令历史失败：{e}"))?)
         }
@@ -465,11 +492,9 @@ fn data_reveal(state: State<'_, AppState>, target: String) -> CmdResult<()> {
 
 /// 删掉 days 天前的命令历史；days 为 0 时全部删掉
 #[tauri::command]
-fn history_prune(state: State<'_, AppState>, days: u32) -> CmdResult<usize> {
-    with_history(
-        &state,
-        |s| if days == 0 { s.clear_all() } else { s.prune_before(now_ms() - days as i64 * 86_400_000) },
-    )
+async fn history_prune(app: tauri::AppHandle, days: u32) -> CmdResult<usize> {
+    let cutoff = now_ms() - days as i64 * 86_400_000;
+    on_history(&app, move |svc| svc.modify(|s| if days == 0 { s.clear_all() } else { s.prune_before(cutoff) })).await
 }
 
 // ---- 剪贴板（走系统接口，WebView 不会弹出权限提示） ------------------------------
@@ -552,7 +577,7 @@ fn diagnostics(state: State<'_, AppState>) -> Diagnostics {
         bundled_conpty: state.bundled_conpty,
         settings_path: state.settings_path.display().to_string(),
         history_path: state.history_path.display().to_string(),
-        history_count: state.history.lock().unwrap().as_ref().and_then(|s| s.count().ok()),
+        history_count: state.history_service().and_then(|s| s.count().ok()),
         backgrounds_dir: state.backgrounds_dir.display().to_string(),
     }
 }
@@ -604,30 +629,26 @@ fn psreadline_history_path() -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-fn open_history(path: &std::path::Path, import: bool, keep_days: u32) -> Option<Store> {
-    let store = Store::open(path).map_err(|e| eprintln!("mooncli: 打开历史库失败: {e}")).ok()?;
-    // "只保留最近 N 天"：每次启动清理一次
-    if keep_days > 0 {
-        let _ = store.prune_before(now_ms() - keep_days as i64 * 86_400_000);
-    }
-    if import
-        && let Some(p) = psreadline_history_path()
-        && let Ok(content) = std::fs::read_to_string(&p)
-    {
-        let host = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).ok();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        match store.import_psreadline(&content, host.as_deref(), now) {
-            Ok(n) if n > 0 => eprintln!("mooncli: 导入了 {n} 条 PSReadLine 历史"),
-            Ok(_) => {}
-            Err(e) => eprintln!("mooncli: 导入 PSReadLine 历史失败: {e}"),
+/// 打开历史库：先在写连接上做一次性的清理和导入，再起搜索线程（它自己在后台分批建索引）。
+fn open_history(path: &std::path::Path, import: bool, keep_days: u32) -> Option<HistoryService> {
+    let prepare = |store: &Store| {
+        // "只保留最近 N 天"：每次启动清理一次
+        if keep_days > 0 {
+            let _ = store.prune_before(now_ms() - keep_days as i64 * 86_400_000);
         }
-    }
-    // 提前建好内存索引，第一次打开历史面板就不用等
-    let _ = store.search(&Query::new("", 0));
-    Some(store)
+        if import
+            && let Some(p) = psreadline_history_path()
+            && let Ok(content) = std::fs::read_to_string(&p)
+        {
+            let host = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).ok();
+            match store.import_psreadline(&content, host.as_deref(), now_ms()) {
+                Ok(n) if n > 0 => eprintln!("mooncli: 导入了 {n} 条 PSReadLine 历史"),
+                Ok(_) => {}
+                Err(e) => eprintln!("mooncli: 导入 PSReadLine 历史失败: {e}"),
+            }
+        }
+    };
+    HistoryService::open(path, Filter::default(), prepare).map_err(|e| eprintln!("mooncli: 打开历史库失败: {e}")).ok()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -709,6 +730,7 @@ pub fn run() {
             open_url,
             session_stats,
             history_search,
+            history_page,
             history_detail,
             history_hosts,
             history_favorite,

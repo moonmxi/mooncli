@@ -10,6 +10,7 @@ import type {
   Diagnostics,
   HistoryDetail,
   HistoryHit,
+  HistoryPage,
   HostCount,
   ImportSummary,
   IntegrationOutcome,
@@ -69,10 +70,19 @@ export function tauriBackend(): Backend {
     historySearch: (text, opts) =>
       invoke<HistoryHit[]>("history_search", {
         query: { text, nowMs: Date.now(), cwd: opts?.cwd ?? null, limit: opts?.limit ?? 50 },
+        lane: opts?.lane ?? null,
       }),
     historyQuery: (q) =>
       invoke<HistoryHit[]>("history_search", {
         query: { dedupe: true, limit: 200, ...q, scope: q.scope ?? { kind: "all" }, nowMs: Date.now() },
+        lane: "query",
+      }),
+    historyPage: (q, lane, offset, limit) =>
+      invoke<HistoryPage>("history_page", {
+        query: { dedupe: true, ...q, scope: q.scope ?? { kind: "all" }, nowMs: Date.now() },
+        lane,
+        offset,
+        limit,
       }),
     historyDetail: (text) => invoke<HistoryDetail>("history_detail", { text }),
     historyHosts: () => invoke<HostCount[]>("history_hosts"),

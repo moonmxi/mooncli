@@ -46,7 +46,7 @@ export function CompletionPanel({ backend, docked, uiScale }: { backend: Backend
     const typed = inp.line.trim();
     const lower = typed.toLowerCase();
     backend
-      .historySearch(typed, { cwd, limit: 40 })
+      .historySearch(typed, { cwd, limit: 40, lane: "complete" })
       .then((hits) => setHistory(hits.filter((h) => h.text.toLowerCase().startsWith(lower)).slice(0, 8).map((h) => ({ text: h.text, count: h.count }))))
       .catch(() => setHistory([]));
   }, [backend, id]);

@@ -298,8 +298,10 @@ pub struct Remote {
 pub struct Agent {
     /// 额度卡片的总开关。关时不采集、不显示卡片
     pub enabled: bool,
-    /// 通过本机 Codex 的 app-server 实时查询额度（登录、联网都由 Codex 自己完成）
+    /// 主动查询额度：`claude -p /usage`、codex app-server（登录、联网都由它们自己完成）
     pub live_quota: bool,
+    /// claude 可执行文件的位置；不填时自动在 PATH 里找
+    pub claude_path: Option<String>,
     /// codex 可执行文件的位置；不填时自动在 PATH 里找
     pub codex_path: Option<String>,
     pub notify: AgentNotify,
@@ -307,7 +309,7 @@ pub struct Agent {
 
 impl Default for Agent {
     fn default() -> Self {
-        Self { enabled: false, live_quota: true, codex_path: None, notify: AgentNotify::default() }
+        Self { enabled: false, live_quota: true, claude_path: None, codex_path: None, notify: AgentNotify::default() }
     }
 }
 

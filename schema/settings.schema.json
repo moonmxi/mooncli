@@ -298,6 +298,13 @@
           "type": "boolean",
           "default": true
         },
+        "claudePath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "codexPath": {
           "type": [
             "string",
@@ -344,6 +351,10 @@
             "opacity": {
               "type": "number",
               "default": 0.95
+            },
+            "scale": {
+              "type": "number",
+              "default": 1
             },
             "warnAt": {
               "type": "number",

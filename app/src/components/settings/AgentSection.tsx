@@ -46,7 +46,7 @@ export function AgentSection({ s, update, backend }: { s: AppSettings; update: U
         >
           <Toggle label="Agent 额度" value={a.enabled} onChange={(v) => update((d) => (d.agent.enabled = v))} />
         </Row>
-        <Row label="浮动卡片" desc="停在窗口一角，按住标题可以拖到别的角。">
+        <Row label="浮动卡片" desc="停在窗口一角，按住标题可以拖到别的角；卡片右上角可以直接调透明度、大小，或者隐藏。">
           <Segmented
             label="浮动卡片"
             value={a.widget.style}
@@ -66,10 +66,13 @@ export function AgentSection({ s, update, backend }: { s: AppSettings; update: U
           </button>
         </Row>
         <Row
-          label="Codex 实时额度"
-          desc="每两分钟通过本机 Codex 的 app-server（Codex IDE 插件用的官方接口）查一次，不用等下一轮对话。登录和联网都由 Codex 自己完成。关掉时用会话文件里最近一次的记录。"
+          label="主动查询额度"
+          desc="定时问本机的 Claude Code（claude -p /usage，本地命令，不调模型、不留会话记录）和 Codex（app-server，Codex IDE 插件用的接口）要额度；Agent 跑完一轮时立刻再查一次。登录和联网都由它们自己完成。关掉时只用接入后送来的数据和会话文件。"
         >
-          <Toggle label="Codex 实时额度" value={a.liveQuota} onChange={(v) => update((d) => (d.agent.liveQuota = v))} />
+          <Toggle label="主动查询额度" value={a.liveQuota} onChange={(v) => update((d) => (d.agent.liveQuota = v))} />
+        </Row>
+        <Row label="claude 位置" desc="留空时自动在 PATH 和 ~/.local/bin 里找。">
+          <TextInput label="claude 位置" mono value={a.claudePath ?? ""} placeholder="自动" onCommit={(v) => update((d) => (d.agent.claudePath = v.trim() || null))} />
         </Row>
         <Row label="codex 位置" desc="留空时自动在 PATH 里找（npm 装的会找到包里自带的 codex.exe）。">
           <TextInput label="codex 位置" mono value={a.codexPath ?? ""} placeholder="自动" onCommit={(v) => update((d) => (d.agent.codexPath = v.trim() || null))} />
@@ -90,7 +93,19 @@ export function AgentSection({ s, update, backend }: { s: AppSettings; update: U
           />
         </Row>
         <Row label="不透明度">
-          <Stepper label="卡片不透明度" value={Math.round(a.widget.opacity * 100)} min={50} max={100} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.opacity = v / 100))} />
+          <Stepper label="卡片不透明度" value={Math.round(a.widget.opacity * 100)} min={40} max={100} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.opacity = v / 100))} />
+        </Row>
+        <Row label="大小">
+          <Segmented
+            label="卡片大小"
+            value={String(a.widget.scale)}
+            options={[
+              { value: "0.85", label: "小" },
+              { value: "1", label: "中" },
+              { value: "1.2", label: "大" },
+            ]}
+            onChange={(v) => update((d) => (d.agent.widget.scale = Number(v)))}
+          />
         </Row>
         <Row label="警告阈值" desc="用量达到这个比例时进度条变警告色">
           <Stepper label="警告阈值" value={Math.round(a.widget.warnAt * 100)} min={50} max={90} step={5} unit="%" onChange={(v) => update((d) => (d.agent.widget.warnAt = v / 100))} />
@@ -172,7 +187,7 @@ function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePat
         label="说明"
         desc={
           <>
-            把两者的官方扩展点指向 mooncli-bridge，额度和完成提醒才是实时的。你原来的 statusLine、notify 会保存下来由 bridge 原样转调，hooks 只追加不覆盖；写入前先给你看变更清单并自动备份，断开时精确恢复。也可以
+            把两者的官方扩展点指向 mooncli-bridge，才有完成提醒和更准的上下文；额度不接入也能查。你原来的 statusLine、notify 会保存下来由 bridge 原样转调，hooks 只追加不覆盖；写入前先给你看变更清单并自动备份，断开时精确恢复。也可以
             <button type="button" className="link-btn" onClick={() => setManual((v) => !v)}>
               {manual ? "收起手动配置" : "自己手动配置"}
             </button>
@@ -183,7 +198,7 @@ function IntegrationGroup({ backend, bridgePath }: { backend: Backend; bridgePat
       >
         <span />
       </Row>
-      {row("claude", "statusLine 送来 5 小时 / 7 天额度（Pro / Max 订阅）和上下文；hooks 在一轮结束、要你确认时提醒。没有原状态栏时，bridge 在 Claude Code 底部显示一行「模型 · 上下文 · 额度」。", status?.claudeSettingsPath)}
+      {row("claude", "hooks 在一轮结束、要你确认时提醒，并让额度在每轮结束后立刻刷新；statusLine 送来当前会话的上下文（没有原状态栏时，bridge 在 Claude Code 底部显示一行「模型 · 上下文 · 额度」）。额度本身不接入也能查。", status?.claudeSettingsPath)}
       {row("codex", "notify：一轮结束时提醒，并把会话关联到标签页。额度来自 Codex 的 app-server，不依赖接入。", status?.codexConfigPath)}
       {pending && (
         <Row

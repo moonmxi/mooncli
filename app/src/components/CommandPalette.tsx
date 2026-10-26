@@ -66,7 +66,7 @@ export function CommandPalette({ commands, backend }: { commands: PaletteCommand
     let alive = true;
     const t = setTimeout(() => {
       backend
-        .historySearch(query, { cwd: activeTab?.cwd, limit: 8 })
+        .historySearch(query, { cwd: activeTab?.cwd, limit: 8, lane: "palette" })
         .then((h) => alive && setHistory(h))
         .catch(() => alive && setHistory([]));
     }, 60);

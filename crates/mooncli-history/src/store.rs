@@ -378,6 +378,32 @@ impl Store {
         Ok(())
     }
 
+    /// 从 `below` 往下（不含）按 id 倒序读一批记录加进索引，最新的先进来。
+    /// 返回下一批的起点；读完了返回 None。搜索线程分批建索引用：每批之间还能处理新的查询。
+    pub(crate) fn load_index_chunk(&self, ix: &mut Index, below: i64, limit: usize) -> Result<Option<i64>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, text, cwd, exit_code, started_at, host FROM commands WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let mut rows = stmt.query(params![below, limit as i64])?;
+        let mut last = None;
+        let mut n = 0;
+        while let Some(r) = rows.next()? {
+            let id: i64 = r.get(0)?;
+            let mut rec = CommandRecord::new(r.get::<_, String>(1)?, r.get(4)?);
+            rec.cwd = r.get(2)?;
+            rec.exit_code = r.get(3)?;
+            rec.host = r.get(5)?;
+            ix.add(id, &rec);
+            last = Some(id);
+            n += 1;
+        }
+        Ok(if n < limit { None } else { last })
+    }
+
+    pub(crate) fn max_id(&self) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COALESCE(MAX(id), 0) FROM commands", [], |r| r.get(0))?)
+    }
+
     pub fn count(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM commands", [], |r| r.get(0))?)
     }

@@ -1,9 +1,14 @@
 // 历史面板（Ctrl+Shift+R）：找回、整理执行过的命令。设计见 docs/04 §3。
 // 左边是列表（可按目录、本标签页、收藏、成败、主机筛选），右边是选中命令的详情和每次执行的记录。
+//
+// 不卡的做法（docs/04 §3"性能"）：搜索在后端的搜索线程里做，界面只发请求、收结果；
+// 每次只要一页（100 条），往下滚到快见底时再要下一页；列表是虚拟的，只渲染看得见的几十行；
+// 新结果到之前旧结果留在原处，不闪；过时的结果直接丢掉。
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Backend, HistoryDetail, HistoryHit, HistoryQuery, HostCount } from "../backend/types";
+import { SUPERSEDED, type Backend, type HistoryDetail, type HistoryHit, type HistoryQuery, type HostCount } from "../backend/types";
 import { dayGroup, duration, exitLabel, fullTime, relativeTime, shortDir } from "../history/format";
+import { layoutItems, scrollToShow, visibleRange } from "../history/virtual";
 import { useStore, type Tab } from "../state/store";
 import { useUi } from "../state/ui";
 import { Icon } from "./Icons";
@@ -19,6 +24,21 @@ const SCOPES: { key: ScopeKey; label: string }[] = [
 ];
 
 const PREFS_KEY = "mooncli.history";
+/** 一页多少条；离列表底部还剩这么多行时要下一页 */
+const PAGE = 100;
+const PREFETCH_ROWS = 30;
+/** 没输入、看全部时，最上面单独列出的收藏 */
+const FAV_LIMIT = 30;
+
+interface ListState {
+  /** 这份结果对应的查询（变了就作废） */
+  key: string;
+  hits: HistoryHit[];
+  total: number | null;
+  hasMore: boolean;
+  partial: boolean;
+}
+const EMPTY_LIST: ListState = { key: "", hits: [], total: 0, hasMore: false, partial: false };
 
 function loadPrefs(): { dedupe: boolean } {
   try {
@@ -78,8 +98,9 @@ const isRemote = (h: { host: string | null }, localHost?: string) =>
 interface RowProps {
   hit: HistoryHit;
   index: number;
+  /** 在虚拟列表里的位置（像素） */
+  top: number;
   selected: boolean;
-  group: string | null;
   dedupe: boolean;
   remote: boolean;
   onHover(i: number): void;
@@ -88,10 +109,9 @@ interface RowProps {
 }
 
 /** 一行。用 memo 包起来：移动选中、输入搜索词时只有变了的行重画 */
-const HistoryRow = memo(function HistoryRow({ hit: h, index: i, selected, group, dedupe, remote, onHover, onPick, onStar }: RowProps) {
+const HistoryRow = memo(function HistoryRow({ hit: h, index: i, top, selected, dedupe, remote, onHover, onPick, onStar }: RowProps) {
   return (
-    <div>
-      {group && <div className="pal-group">{group}</div>}
+    <div className="hx-vitem" style={{ top }}>
       <div
         role="option"
         aria-selected={selected}
@@ -138,8 +158,11 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
   const [status, setStatus] = useState<Status>("any");
   const [host, setHost] = useState<string>("");
   const [dedupe, setDedupe] = useState(loadPrefs().dedupe);
-  const [hits, setHits] = useState<HistoryHit[]>([]);
+  const [list, setList] = useState<ListState>(EMPTY_LIST);
   const [favs, setFavs] = useState<HistoryHit[]>([]);
+  /** 第一页还在路上（超过一小会儿才显示进度条，快的时候不闪） */
+  const [loading, setLoading] = useState(false);
+  const [viewport, setViewport] = useState({ top: 0, height: 600 });
   const [hosts, setHosts] = useState<HostCount[]>([]);
   const [sel, setSel] = useState(0);
   const [detail, setDetail] = useState<HistoryDetail | null>(null);
@@ -147,7 +170,8 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
+  const listEl = useRef<HTMLDivElement>(null);
+  const moreBusy = useRef(false);
 
   // 打开时：清空输入；连在远程主机上时默认只看那台主机的命令
   useEffect(() => {
@@ -192,33 +216,109 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
     };
   }, [query, scope, status, host, dedupe, tabId, cwd]);
 
-  // 输入停顿 60ms 再查；没输入、看全部的时候，把收藏的单独放在最上面
+  const searching = !!query.trim();
+  // 没输入、看全部的时候，把收藏的单独放在最上面
+  const pinFavs = !searching && scope === "all";
+  const key = `${JSON.stringify(baseQuery)}#${reload}`;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+
+  // 查第一页：每次按键都直接发（后端同一路只算最新的，排队的旧查询作废），不用防抖；
+  // 结果回来之前旧结果留着，回来的若已过时就丢掉
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    const t = setTimeout(() => {
-      const pinFavs = !query.trim() && scope === "all";
-      Promise.all([
-        backend.historyQuery(baseQuery),
-        pinFavs ? backend.historyQuery({ ...baseQuery, favoritesOnly: true, dedupe: true, limit: 30 }) : Promise.resolve([]),
-      ]).then(
-        ([h, f]) => {
+    let retry: number | undefined;
+    const slow = window.setTimeout(() => alive && setLoading(true), 150);
+    const run = () =>
+      backend.historyPage(baseQuery, "panel", 0, PAGE).then(
+        (p) => {
           if (!alive) return;
-          const favTexts = new Set(f.map((x) => x.text));
-          setFavs(f);
-          setHits(pinFavs ? h.filter((x) => !favTexts.has(x.text)) : h);
+          clearTimeout(slow);
+          setLoading(false);
+          setList({ key, ...p });
+          // 历史库刚启动、还在后台建索引：过一会儿再查一次，把完整的结果补上
+          if (p.partial) retry = window.setTimeout(run, 500);
         },
-        () => alive && (setHits([]), setFavs([])),
+        (e) => {
+          if (!alive || String(e).includes(SUPERSEDED)) return;
+          clearTimeout(slow);
+          setLoading(false);
+          setList({ ...EMPTY_LIST, key });
+        },
       );
-    }, 60);
+    run();
+    if (pinFavs) {
+      backend
+        .historyPage({ ...baseQuery, favoritesOnly: true, dedupe: true }, "panel-fav", 0, FAV_LIMIT)
+        .then((p) => alive && setFavs(p.hits), () => {});
+    } else setFavs([]);
     return () => {
       alive = false;
-      clearTimeout(t);
+      clearTimeout(slow);
+      clearTimeout(retry);
     };
-  }, [open, baseQuery, backend, query, scope, reload]);
+    // key 已经包含了 baseQuery 和 reload
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, key, backend]);
 
-  const rows = useMemo(() => [...favs, ...hits], [favs, hits]);
-  useEffect(() => setSel(0), [baseQuery]);
+  // 收藏已经列在最上面了，下面的结果里不再重复
+  const rows = useMemo(() => {
+    if (!pinFavs || favs.length === 0) return list.hits;
+    const favTexts = new Set(favs.map((x) => x.text));
+    return [...favs, ...list.hits.filter((x) => !favTexts.has(x.text))];
+  }, [favs, list.hits, pinFavs]);
+  const favCount = pinFavs ? favs.length : 0;
+
+  // 要下一页：同一路，后端从缓存的排序结果里直接切，几乎不花时间
+  const loadMore = useCallback(() => {
+    const l = live.current.list;
+    if (!l.hasMore || moreBusy.current || l.key !== keyRef.current) return;
+    moreBusy.current = true;
+    backend
+      .historyPage(live.current.baseQuery, "panel", l.hits.length, PAGE)
+      .then(
+        (p) =>
+          setList((cur) =>
+            cur.key === l.key && cur.hits.length === l.hits.length
+              ? { ...cur, hits: [...cur.hits, ...p.hits], hasMore: p.hasMore, total: p.total ?? cur.total, partial: p.partial }
+              : cur,
+          ),
+        () => {},
+      )
+      .finally(() => (moreBusy.current = false));
+  }, [backend]);
+
+  // 虚拟列表的排版：分组标题 + 每行的位置
+  const layout = useMemo(
+    () => layoutItems(rows.length, (i) => (i < favCount ? "收藏" : searching ? "" : dayGroup(rows[i].lastUsed))),
+    [rows, favCount, searching],
+  );
+  const [start, end] = visibleRange(layout.items, viewport.top, viewport.height);
+  const lastShown = end > 0 ? layout.items[end - 1] : undefined;
+  const lastShownRow = lastShown?.kind === "row" ? lastShown.index : -1;
+  useEffect(() => {
+    if (lastShownRow >= rows.length - PREFETCH_ROWS) loadMore();
+  }, [lastShownRow, rows.length, loadMore]);
+
+  const onScroll = useCallback(() => {
+    const el = listEl.current;
+    if (el) setViewport({ top: el.scrollTop, height: el.clientHeight });
+  }, []);
+  useEffect(() => {
+    const el = listEl.current;
+    if (!open || !el) return;
+    const ro = new ResizeObserver(onScroll);
+    ro.observe(el);
+    onScroll();
+    return () => ro.disconnect();
+  }, [open, onScroll]);
+
+  // 换了查询：回到顶部
+  useEffect(() => {
+    setSel(0);
+    if (listEl.current) listEl.current.scrollTop = 0;
+  }, [baseQuery]);
   const current = rows[Math.min(sel, rows.length - 1)];
 
   // 选中的命令的详情
@@ -235,8 +335,15 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
     };
   }, [open, current?.text, backend, reload]);
 
+  // 键盘移动选中时，让选中的行露出来
   useEffect(() => {
-    list.current?.querySelector(".hx-row.sel")?.scrollIntoView({ block: "nearest" });
+    const el = listEl.current;
+    const top = layout.rowTop[sel];
+    if (!el || top === undefined) return;
+    const next = scrollToShow(el.scrollTop, el.clientHeight, top);
+    if (next !== el.scrollTop) el.scrollTop = next;
+    // 只在选中变化时滚
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel]);
 
   const close = useCallback(() => setOpen(false), [setOpen]);
@@ -281,8 +388,8 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
   const isRemoteHit = (h: HistoryHit) => isRemote(h, localHost);
 
   // 给每一行的回调要保持不变（memo 才有用），所以通过 ref 拿最新的数据和函数
-  const live = useRef({ rows, send, toggleFav });
-  live.current = { rows, send, toggleFav };
+  const live = useRef({ rows, send, toggleFav, list, baseQuery });
+  live.current = { rows, send, toggleFav, list, baseQuery };
   const onHover = useCallback((i: number) => setSel(i), []);
   const onPick = useCallback((i: number, run: boolean | null) => {
     setSel(i);
@@ -340,9 +447,6 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
     }
   };
 
-  const searching = !!query.trim();
-  let lastGroup = "";
-  const groupOf = (h: HistoryHit, i: number) => (i < favs.length ? "收藏" : searching ? "" : dayGroup(h.lastUsed));
   const remoteHosts = hosts.filter((h) => h.remote);
   const cwdLabel = shortDir(cwd);
 
@@ -430,31 +534,35 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
         </div>
 
         <div className="hx-body">
-          <div className="hx-list" ref={list} role="listbox" aria-label="命令">
-            {rows.length === 0 && (
+          <div className="hx-list" ref={listEl} role="listbox" aria-label="命令" onScroll={onScroll}>
+            {loading && <div className="hx-loading" aria-hidden />}
+            {rows.length === 0 && !loading && list.key === key && (
               <div className="pal-empty">
                 {searching ? "没有找到匹配的命令" : scope === "fav" ? "还没有收藏的命令。选中一条按 Ctrl+S 收藏" : "这里还没有记录"}
               </div>
             )}
-            {rows.map((h, i) => {
-              const g = groupOf(h, i);
-              const head = g && g !== lastGroup ? g : null;
-              lastGroup = g;
-              return (
-                <HistoryRow
-                  key={`${i < favs.length ? "f" : "h"}-${h.id}`}
-                  hit={h}
-                  index={i}
-                  selected={i === sel}
-                  group={head}
-                  dedupe={dedupe}
-                  remote={isRemoteHit(h)}
-                  onHover={onHover}
-                  onPick={onPick}
-                  onStar={onStar}
-                />
-              );
-            })}
+            <div className="hx-space" style={{ height: layout.height }}>
+              {layout.items.slice(start, end).map((it) =>
+                it.kind === "group" ? (
+                  <div key={`g-${it.top}`} className="pal-group hx-vitem hx-vgroup" style={{ top: it.top }}>
+                    {it.label}
+                  </div>
+                ) : (
+                  <HistoryRow
+                    key={`${it.index < favCount ? "f" : "h"}-${rows[it.index].id}`}
+                    hit={rows[it.index]}
+                    index={it.index}
+                    top={it.top}
+                    selected={it.index === sel}
+                    dedupe={dedupe}
+                    remote={isRemoteHit(rows[it.index])}
+                    onHover={onHover}
+                    onPick={onPick}
+                    onStar={onStar}
+                  />
+                ),
+              )}
+            </div>
           </div>
 
           <aside className="hx-detail" aria-label="详情">
@@ -549,6 +657,9 @@ export const HistoryPanel = memo(function HistoryPanel({ backend, onNewTab }: { 
           </span>
           <span>
             <kbd>Alt+1~4</kbd> 范围
+          </span>
+          <span className="hx-count-foot">
+            {list.partial ? "正在载入完整历史…" : list.total !== null ? `${list.total} 条` : list.hasMore ? `${list.hits.length}+ 条` : `${list.hits.length} 条`}
           </span>
         </div>
       </div>

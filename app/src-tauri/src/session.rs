@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use mooncli_history::{CommandRecord, Store};
+use mooncli_history::{CommandRecord, HistoryService};
 use mooncli_protocol::{
     ConnectTarget, ShellEvent, ShellState, Tracker, TrackerUpdate, clean_title, cwd_from_title, is_uninformative,
 };
@@ -147,7 +147,7 @@ pub struct UiSink {
     channel: Channel<UiMsg>,
     tracker: Mutex<Tracker>,
     info: Mutex<SessionInfo>,
-    history: Arc<Mutex<Option<Store>>>,
+    history: Arc<Mutex<Option<HistoryService>>>,
     counters: Counters,
     started: Instant,
     /// 上次报给界面的进程链，没变就不重复发
@@ -156,7 +156,7 @@ pub struct UiSink {
 }
 
 impl UiSink {
-    pub fn new(id: String, channel: Channel<UiMsg>, history: Arc<Mutex<Option<Store>>>) -> Self {
+    pub fn new(id: String, channel: Channel<UiMsg>, history: Arc<Mutex<Option<HistoryService>>>) -> Self {
         Self {
             id,
             channel,
@@ -300,7 +300,7 @@ impl UiSink {
             }
             TrackerUpdate::CommandFinished { text, exit_code } => {
                 if let Some(r) = self.info.lock().unwrap().running.take()
-                    && let (Some(id), Some(store)) = (r.record_id, self.history.lock().unwrap().as_ref())
+                    && let (Some(id), Some(store)) = (r.record_id, self.history_service().as_ref())
                 {
                     let _ = store.finish(id, exit_code, now_ms() - r.started_at);
                 }
@@ -312,7 +312,7 @@ impl UiSink {
                 // 连上了：连接命令到这里算成功完成，耗时就是连接用的时间
                 let mut info = self.info.lock().unwrap();
                 if let Some(r) = info.running.take()
-                    && let (Some(id), Some(store)) = (r.record_id, self.history.lock().unwrap().as_ref())
+                    && let (Some(id), Some(store)) = (r.record_id, self.history_service().as_ref())
                 {
                     let _ = store.finish(id, Some(0), now_ms() - r.started_at);
                 }
@@ -346,7 +346,7 @@ impl UiSink {
                     let duration = now_ms() - c.started_at;
                     c.finished = Some((exit_code, duration));
                     if c.text_known {
-                        if let (Some(id), Some(store)) = (c.record_id, self.history.lock().unwrap().as_ref()) {
+                        if let (Some(id), Some(store)) = (c.record_id, self.history_service().as_ref()) {
                             let _ = store.finish(id, exit_code, duration);
                         }
                         info.remote_cmds.remove(i);
@@ -385,7 +385,7 @@ impl UiSink {
             rec.exit_code = exit;
             rec.duration_ms = Some(duration);
         }
-        let history = self.history.lock().unwrap();
+        let history = self.history_service();
         let id = history.as_ref().and_then(|s| s.insert(&rec).ok().flatten());
         if c.finished.is_some() {
             info.remote_cmds.remove(i);
@@ -393,6 +393,11 @@ impl UiSink {
             c.text_known = true;
             c.record_id = id;
         }
+    }
+
+    /// 历史库服务的克隆：取出来就放开锁，写历史不挡住别的标签页
+    fn history_service(&self) -> Option<HistoryService> {
+        self.history.lock().unwrap().clone()
     }
 
     fn record_start(&self, text: &str, started_at: i64) -> Option<i64> {
@@ -403,7 +408,7 @@ impl UiSink {
         rec.session_id = Some(self.id.clone());
         rec.shell = Some("pwsh".into());
         drop(info);
-        self.history.lock().unwrap().as_ref().and_then(|s| s.insert(&rec).ok().flatten())
+        self.history_service().as_ref().and_then(|s| s.insert(&rec).ok().flatten())
     }
 }
 

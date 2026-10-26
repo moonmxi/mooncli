@@ -6,11 +6,11 @@ use rusqlite::types::Value;
 
 use std::collections::HashSet;
 
-use crate::index::TextStats;
+use crate::index::{Index, TextStats};
 use crate::{Result, Store};
 
 /// (排序分, 最近一次的 id, 索引里的位置, 按主机筛选时那台主机的位置)
-type Scored = (f64, i64, usize, Option<usize>);
+pub(crate) type Scored = (f64, i64, usize, Option<usize>);
 
 const DAY: i64 = 24 * 60 * 60 * 1000;
 /// 去重视图最多从数据库取这么多条不同的命令来打分。十万条历史里不同命令通常远少于这个数。
@@ -168,7 +168,7 @@ impl Store {
             .collect())
     }
 
-    /// 去重搜索走内存索引：先筛选、只用引用打分，选出前 `limit` 名再生成结果。
+    /// 去重搜索走内存索引：全部打分排好，取前 `limit` 名生成结果。
     fn search_index(
         &self,
         q: &Query,
@@ -179,110 +179,69 @@ impl Store {
         self.load_index()?;
         let ix = self.index.borrow();
         let ix = ix.as_ref().expect("刚加载过");
-        let in_cwd = match &q.scope {
-            Scope::Cwd(c) => Some(c),
-            _ => None,
-        };
-        // 先做便宜的筛选，再做模糊匹配
-        let pass = |e: &TextStats| {
-            in_cwd.is_none_or(|c| e.cwds.contains_key(c))
-                && (!q.success_only || e.ok > 0)
-                && (!q.failed_only || e.failed > 0)
-                && (!q.favorites_only || favorites.contains(&e.text))
-        };
-        let mut scored: Vec<Scored> = Vec::new();
-        for (i, e) in ix.entries.iter().enumerate() {
-            if !pass(e) {
+        let ranked = rank_index(ix, q, fz, recent, favorites, &|| false).unwrap_or_default();
+        Ok(ranked.iter().take(q.limit).map(|s| hit_from(ix, s, q, fz)).collect())
+    }
+
+    /// 不去重：按时间倒序逐行看，跳过前 `offset` 条匹配的，收集 `limit` 条就停（真正的分页，不用把十万行都读出来）。
+    /// 返回（这一页，后面还有没有）。`cancel` 返回 true 时提前放弃（有了更新的查询）。
+    pub(crate) fn scan_runs(
+        &self,
+        q: &Query,
+        fz: &mut Fuzzy,
+        offset: usize,
+        limit: usize,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Option<(Vec<Hit>, bool)>> {
+        let (where_sql, args) = where_clause(q);
+        let sql = format!(
+            "SELECT id, text, started_at, cwd, exit_code, host, duration_ms FROM commands WHERE {where_sql}
+             ORDER BY started_at DESC, id DESC"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(args))?;
+        let mut skipped = 0;
+        let mut out = Vec::new();
+        let mut seen = 0usize;
+        while let Some(r) = rows.next()? {
+            seen += 1;
+            if seen.is_multiple_of(4096) && cancel() {
+                return Ok(None);
+            }
+            let text: String = r.get(1)?;
+            let Some(score) = fz.score(&text) else { continue };
+            if skipped < offset {
+                skipped += 1;
                 continue;
             }
-            let host = q.host.as_ref().and_then(|h| e.hosts.iter().position(|x| &x.host == h));
-            if q.host.is_some() && host.is_none() {
-                continue;
+            if out.len() == limit {
+                return Ok(Some((out, true)));
             }
-            let Some(m) = fz.score(&e.text) else { continue };
-            let stats = Stats {
-                weighted_uses: e.uses.iter().map(|&t| decay(q.now_ms - t)).sum(),
-                here: q.cwd.as_ref().and_then(|c| e.cwds.get(c)).copied().unwrap_or(0) as i64,
-                ok: e.ok as i64,
-                failed: e.failed as i64,
-            };
-            let (last_used, last_id) = match host {
-                Some(h) => (e.hosts[h].last_used, e.hosts[h].last_id),
-                None => (e.last_used, e.last_id),
-            };
-            let rank = if q.sort == Sort::Recent { last_used as f64 } else { m + bonus(&stats, &e.text, q, recent) };
-            scored.push((rank, last_id, i, host));
+            out.push(Hit {
+                id: r.get(0)?,
+                matched: fz.indices(&text),
+                text,
+                count: 1,
+                last_used: r.get(2)?,
+                last_cwd: r.get(3)?,
+                last_exit: r.get(4)?,
+                host: r.get(5)?,
+                duration_ms: r.get(6)?,
+                favorite: false,
+                score,
+            });
         }
-        // 按时间排时 rank 就是最近一次的时间
-        let by_rank = |a: &Scored, b: &Scored| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1));
-        if scored.len() > q.limit && q.limit > 0 {
-            scored.select_nth_unstable_by(q.limit - 1, by_rank);
-            scored.truncate(q.limit);
-        }
-        scored.sort_unstable_by(by_rank);
-        Ok(scored
-            .into_iter()
-            .take(q.limit)
-            .map(|(score, _, i, host)| {
-                let e = &ix.entries[i];
-                let mut hit = Hit {
-                    id: e.last_id,
-                    text: e.text.clone(),
-                    count: match in_cwd {
-                        Some(c) => e.cwds.get(c).copied().unwrap_or(0) as i64,
-                        None => e.uses.len() as i64,
-                    },
-                    last_used: e.last_used,
-                    last_cwd: e.last_cwd.clone(),
-                    last_exit: e.last_exit,
-                    duration_ms: e.last_duration,
-                    host: e.host.clone(),
-                    favorite: false,
-                    matched: fz.indices(&e.text),
-                    score,
-                };
-                // 按主机筛选时，显示那台主机上的次数和最近一次
-                if let Some(h) = host.map(|h| &e.hosts[h]) {
-                    hit.id = h.last_id;
-                    hit.count = h.count as i64;
-                    hit.last_used = h.last_used;
-                    hit.last_cwd = h.last_cwd.clone();
-                    hit.last_exit = h.last_exit;
-                    hit.duration_ms = h.last_duration;
-                    hit.host = Some(h.host.clone());
-                }
-                hit
-            })
-            .collect())
+        Ok(Some((out, false)))
     }
 
     fn candidates_from_sql(&self, q: &Query) -> Result<Vec<Candidate>> {
-        let mut wheres = vec!["1 = 1".to_string()];
-        let mut args: Vec<Value> = Vec::new();
+        let (where_sql, mut args) = where_clause(q);
         let arg = |v: Value, args: &mut Vec<Value>| {
             args.push(v);
             format!("?{}", args.len())
         };
-        match &q.scope {
-            Scope::All => {}
-            Scope::Cwd(d) => wheres.push(format!("cwd = {}", arg(Value::Text(d.clone()), &mut args))),
-            Scope::Session(s) => wheres.push(format!("session_id = {}", arg(Value::Text(s.clone()), &mut args))),
-        }
-        if let Some(h) = &q.host {
-            wheres.push(format!("host = {}", arg(Value::Text(h.clone()), &mut args)));
-        }
-        if q.success_only {
-            wheres.push("exit_code = 0".into());
-        }
-        if q.failed_only {
-            wheres.push("exit_code IS NOT NULL AND exit_code <> 0".into());
-        }
-        if q.favorites_only {
-            wheres.push("text IN (SELECT text FROM favorites)".into());
-        }
         let now = arg(Value::Integer(q.now_ms), &mut args);
         let cwd = arg(q.cwd.clone().map(Value::Text).unwrap_or(Value::Null), &mut args);
-        let where_sql = wheres.join(" AND ");
         // 不合并、又没输入搜索词时，按时间取前 limit 条就是结果，不用多取
         let cap = if q.text.trim().is_empty() { q.limit as i64 } else { MAX_CANDIDATES };
         // 时间衰减：一天内 4、一周内 2、一月内 1、更早 0.5
@@ -336,7 +295,7 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    fn recent_in_session(&self, q: &Query) -> Result<Vec<String>> {
+    pub(crate) fn recent_in_session(&self, q: &Query) -> Result<Vec<String>> {
         let Some(sid) = &q.session_id else { return Ok(Vec::new()) };
         let mut stmt =
             self.conn.prepare_cached("SELECT text FROM commands WHERE session_id = ?1 ORDER BY id DESC LIMIT 10")?;
@@ -345,8 +304,124 @@ impl Store {
     }
 }
 
+/// 筛选条件对应的 SQL WHERE（参数用 ?1、?2……）
+fn where_clause(q: &Query) -> (String, Vec<Value>) {
+    let mut wheres = vec!["1 = 1".to_string()];
+    let mut args: Vec<Value> = Vec::new();
+    let mut arg = |v: Value| {
+        args.push(v);
+        format!("?{}", args.len())
+    };
+    match &q.scope {
+        Scope::All => {}
+        Scope::Cwd(d) => wheres.push(format!("cwd = {}", arg(Value::Text(d.clone())))),
+        Scope::Session(s) => wheres.push(format!("session_id = {}", arg(Value::Text(s.clone())))),
+    }
+    if let Some(h) = &q.host {
+        wheres.push(format!("host = {}", arg(Value::Text(h.clone()))));
+    }
+    if q.success_only {
+        wheres.push("exit_code = 0".into());
+    }
+    if q.failed_only {
+        wheres.push("exit_code IS NOT NULL AND exit_code <> 0".into());
+    }
+    if q.favorites_only {
+        wheres.push("text IN (SELECT text FROM favorites)".into());
+    }
+    (wheres.join(" AND "), args)
+}
+
+/// 在内存索引里筛选、打分，返回全部匹配项（已排好序）。`cancel` 返回 true 时放弃，返回 None。
+pub(crate) fn rank_index(
+    ix: &Index,
+    q: &Query,
+    fz: &mut Fuzzy,
+    recent: &[String],
+    favorites: &HashSet<String>,
+    cancel: &dyn Fn() -> bool,
+) -> Option<Vec<Scored>> {
+    let in_cwd = match &q.scope {
+        Scope::Cwd(c) => Some(c),
+        _ => None,
+    };
+    // 先做便宜的筛选，再做模糊匹配
+    let pass = |e: &TextStats| {
+        in_cwd.is_none_or(|c| e.cwds.contains_key(c))
+            && (!q.success_only || e.ok > 0)
+            && (!q.failed_only || e.failed > 0)
+            && (!q.favorites_only || favorites.contains(&e.text))
+    };
+    let mut scored: Vec<Scored> = Vec::new();
+    for (i, e) in ix.entries.iter().enumerate() {
+        if i % 4096 == 4095 && cancel() {
+            return None;
+        }
+        if !pass(e) {
+            continue;
+        }
+        let host = q.host.as_ref().and_then(|h| e.hosts.iter().position(|x| &x.host == h));
+        if q.host.is_some() && host.is_none() {
+            continue;
+        }
+        let Some(m) = fz.score(&e.text) else { continue };
+        let (last_used, last_id) = match host {
+            Some(h) => (e.hosts[h].last_used, e.hosts[h].last_id),
+            None => (e.last_used, e.last_id),
+        };
+        let rank = if q.sort == Sort::Recent {
+            last_used as f64
+        } else {
+            let stats = Stats {
+                weighted_uses: e.uses.iter().map(|&t| decay(q.now_ms - t)).sum(),
+                here: q.cwd.as_ref().and_then(|c| e.cwds.get(c)).copied().unwrap_or(0) as i64,
+                ok: e.ok as i64,
+                failed: e.failed as i64,
+            };
+            m + bonus(&stats, &e.text, q, recent)
+        };
+        scored.push((rank, last_id, i, host));
+    }
+    // 按时间排时 rank 就是最近一次的时间
+    scored.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(b.1.cmp(&a.1)));
+    Some(scored)
+}
+
+/// 由排好的一项生成结果（高亮位置只给要显示的这些算）
+pub(crate) fn hit_from(ix: &Index, s: &Scored, q: &Query, fz: &mut Fuzzy) -> Hit {
+    let &(score, _, i, host) = s;
+    let e = &ix.entries[i];
+    let mut hit = Hit {
+        id: e.last_id,
+        text: e.text.clone(),
+        count: match &q.scope {
+            Scope::Cwd(c) => e.cwds.get(c).copied().unwrap_or(0) as i64,
+            _ => e.uses.len() as i64,
+        },
+        last_used: e.last_used,
+        last_cwd: e.last_cwd.clone(),
+        last_exit: e.last_exit,
+        duration_ms: e.last_duration,
+        host: e.host.clone(),
+        favorite: false,
+        matched: fz.indices(&e.text),
+        score,
+    };
+    // 按主机筛选时，显示那台主机上的次数和最近一次
+    if let Some(h) = host.map(|h| &e.hosts[h]) {
+        hit.id = h.last_id;
+        hit.count = h.count as i64;
+        hit.last_used = h.last_used;
+        hit.last_cwd = h.last_cwd.clone();
+        hit.last_exit = h.last_exit;
+        hit.duration_ms = h.last_duration;
+        hit.host = Some(h.host.clone());
+    }
+    hit
+}
+
 /// 模糊匹配。空查询匹配一切、得 0 分。
-struct Fuzzy {
+pub(crate) struct Fuzzy {
     pattern: Pattern,
     matcher: Matcher,
     buf: Vec<char>,
@@ -356,7 +431,7 @@ struct Fuzzy {
 }
 
 impl Fuzzy {
-    fn new(text: &str) -> Self {
+    pub(crate) fn new(text: &str) -> Self {
         Self {
             pattern: Pattern::parse(text, CaseMatching::Smart, Normalization::Smart),
             matcher: Matcher::new(Config::DEFAULT),
@@ -367,7 +442,7 @@ impl Fuzzy {
         }
     }
 
-    fn score(&mut self, text: &str) -> Option<f64> {
+    pub(crate) fn score(&mut self, text: &str) -> Option<f64> {
         if self.empty {
             return Some(0.0);
         }
@@ -380,7 +455,7 @@ impl Fuzzy {
         Some(s)
     }
 
-    fn indices(&mut self, text: &str) -> Vec<u32> {
+    pub(crate) fn indices(&mut self, text: &str) -> Vec<u32> {
         if self.empty {
             return Vec::new();
         }

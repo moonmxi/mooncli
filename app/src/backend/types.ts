@@ -126,6 +126,19 @@ export interface HistoryQuery {
   sessionId?: string | null;
 }
 
+/** 一页历史搜索结果（crates/mooncli-history 的 Page） */
+export interface HistoryPage {
+  hits: HistoryHit[];
+  /** 一共多少条匹配；逐条扫描的查询（不合并重复）不知道总数 */
+  total: number | null;
+  hasMore: boolean;
+  /** 历史库还在后台建索引，结果可能不全 */
+  partial: boolean;
+}
+
+/** 搜索被同一路更新的查询顶掉时，后端返回这个错误，调用方忽略即可 */
+export const SUPERSEDED = "superseded";
+
 export interface HistoryRun {
   id: number;
   startedAt: number;
@@ -192,10 +205,10 @@ export interface AgentCurrentSession {
 export interface UsageReport {
   accounts: AgentAccountUsage[];
   current?: AgentCurrentSession | null;
-  /** 实时额度最近一次查询失败的原因 */
-  liveError?: string | null;
-  /** Claude Code 接入了 statusLine 没有（没接入拿不到它的额度） */
-  claudeIntegrated: boolean;
+  /** 各 Agent 最近一次主动查询失败的原因 */
+  liveErrors: Partial<Record<AgentKind, string>>;
+  /** 正在查询的 Agent */
+  refreshing: AgentKind[];
 }
 
 /** 当前标签页里正在跑哪个 Agent：只为它找上下文 */
@@ -272,7 +285,7 @@ export interface Backend {
   sessionStats(id: string): Promise<SessionStats>;
   /** 两个 Agent 的额度，以及 focus 指定的当前会话的上下文（docs/07） */
   agentUsage(focus?: AgentFocus): Promise<UsageReport>;
-  /** 立刻通过 codex app-server 重新查一次实时额度 */
+  /** 立刻重查两个 Agent 的额度（claude /usage、codex app-server），有失败时 reject 原因 */
   agentRefreshLive(): Promise<void>;
   /** 打开 / 关闭独立的置顶额度小窗 */
   agentWindow(open: boolean): Promise<void>;
@@ -283,9 +296,11 @@ export interface Backend {
   agentIntegrationPreview(target: IntegrationTarget, action: IntegrationAction): Promise<IntegrationOutcome>;
   /** 执行接入/断开（改前自动备份原文件） */
   agentIntegrationApply(target: IntegrationTarget, action: IntegrationAction): Promise<IntegrationOutcome>;
-  historySearch(text: string, opts?: { cwd?: string; limit?: number }): Promise<HistoryHit[]>;
+  historySearch(text: string, opts?: { cwd?: string; limit?: number; lane?: string }): Promise<HistoryHit[]>;
   /** 历史面板用的完整查询 */
   historyQuery(q: HistoryQuery): Promise<HistoryHit[]>;
+  /** 搜一页（历史面板逐页加载）。lane 区分是谁在搜，同一路只算最新的查询，旧的会以 SUPERSEDED 失败 */
+  historyPage(q: HistoryQuery, lane: string, offset: number, limit: number): Promise<HistoryPage>;
   historyDetail(text: string): Promise<HistoryDetail>;
   historyHosts(): Promise<HostCount[]>;
   historyFavorite(text: string, on: boolean): Promise<void>;

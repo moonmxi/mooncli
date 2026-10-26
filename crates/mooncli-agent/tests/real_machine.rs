@@ -48,3 +48,16 @@ fn collect_real_files() {
         }
     }
 }
+
+#[test]
+#[ignore = "需要本机装好并登录 Claude Code（订阅）"]
+fn claude_usage_quota() {
+    let exe = mooncli_agent::claude_usage::find_claude_exe(None).expect("应能找到 claude");
+    println!("claude: {}", exe.display());
+    let t = Instant::now();
+    let account =
+        mooncli_agent::claude_usage::fetch(&exe, &std::env::temp_dir().join("mooncli-probe"), Duration::from_secs(40))
+            .expect("应能查到额度");
+    println!("用时 {:?}：{account:#?}", t.elapsed());
+    assert!(account.five_hour.is_some() || account.seven_day.is_some());
+}

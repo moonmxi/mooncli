@@ -145,9 +145,42 @@ fn rollouts_by_mtime(homes: &[PathBuf]) -> Vec<(i64, PathBuf)> {
     out
 }
 
-/// 会话文件里最新的额度快照（实时查询不可用时的退路）。
+/// 最近几天目录里的会话文件，最近改过的在前。目录按 年/月/日 倒序走，凑够 `limit` 个文件就停，
+/// 不扫全部历史（每 5 秒轮询一次也不费事）。被续上的老会话不在最近的目录里，这里不管：
+/// 额度是账号级的，任何一个新会话里的快照都一样。
+fn recent_rollouts(homes: &[PathBuf], limit: usize) -> Vec<(i64, PathBuf)> {
+    fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|e| e.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        v.sort();
+        v.reverse();
+        v
+    }
+    let mut out = Vec::new();
+    for home in homes {
+        let mut found = 0;
+        'outer: for year in sorted_dirs(&home.join("sessions")) {
+            for month in sorted_dirs(&year) {
+                for day in sorted_dirs(&month) {
+                    let mut files = Vec::new();
+                    collect_jsonl(&day, &mut files);
+                    found += files.len();
+                    out.extend(files.into_iter().filter_map(|p| file_mtime_epoch(&p).map(|t| (t, p))));
+                    if found >= limit {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+    out
+}
+
+/// 会话文件里最新的额度快照（Codex 每轮回复后落盘，时刻取文件修改时间）。
 pub fn latest_account(homes: &[PathBuf]) -> Option<AccountUsage> {
-    for (mtime, path) in rollouts_by_mtime(homes).into_iter().take(ACCOUNT_FILES) {
+    for (mtime, path) in recent_rollouts(homes, ACCOUNT_FILES).into_iter().take(ACCOUNT_FILES) {
         let Some(tc) = parse_rollout(&path).and_then(|i| i.token_count) else { continue };
         if let Some(a) = AccountUsage::from_windows(
             AgentKind::Codex,

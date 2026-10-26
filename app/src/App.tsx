@@ -377,6 +377,24 @@ export function App() {
           backend.agentWindow(true).catch((e) => useUi.getState().showNotice(String(e)));
         },
       },
+      {
+        id: "agentcard",
+        group: "Agent",
+        label: "显示 / 隐藏额度卡片",
+        icon: "gauge",
+        keywords: ["agent", "usage", "quota", "额度", "card"],
+        run: () => {
+          const st = useSettings.getState();
+          const a = st.settings.agent;
+          if (!a.enabled || a.widget.style !== "floating") {
+            st.update((d) => {
+              d.agent.enabled = true;
+              d.agent.widget.style = "floating";
+            });
+            useUi.getState().setAgentHidden(false);
+          } else useUi.getState().toggleAgentHidden();
+        },
+      },
       { id: "agentset", group: "Agent", label: "Agent 设置（额度、完成提醒）", icon: "gauge", keywords: ["agent", "claude", "codex", "notify", "提醒"], run: () => useUi.getState().openSettings("agent") },
       { id: "bg", group: "外观", label: "更换背景图", icon: "image", keywords: ["background"], run: () => useUi.getState().openSettings("appearance") },
       { id: "diag", group: "操作", label: "查看诊断信息", icon: "info", keywords: ["diagnostics", "debug"], run: () => useUi.getState().openSettings("shell") },

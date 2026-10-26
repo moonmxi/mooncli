@@ -1963,6 +1963,7 @@ dependencies = [
 name = "mooncli-agent"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tauri-winrt-notification",
