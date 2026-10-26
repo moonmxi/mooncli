@@ -61,7 +61,7 @@ The installer is **not code-signed** yet, so Windows may warn about an unknown p
 ### Turning on agent quotas and notifications
 
 1. Settings (`Ctrl+,`) → Agent → connect Claude Code and Codex. You see the exact changes before anything is written, and the original files are backed up.
-2. Turn on the quota card. Codex quotas work without connecting (via your local Codex's app-server); Claude Code quotas appear after connecting, on the next reply (Pro / Max plans).
+2. Turn on the quota card. Quotas work without connecting: mooncli asks your local Claude Code (`claude /usage`, Pro / Max plans) and Codex (app-server) directly. Connecting adds turn-complete notifications and refreshes quotas right after each turn.
 3. Click "Send test notification" to make sure notifications show up.
 
 ## Development

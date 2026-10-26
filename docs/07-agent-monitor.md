@@ -16,11 +16,14 @@
 
 | | Claude Code | Codex |
 | --- | --- | --- |
-| 来源 | statusLine 输入里的 `rate_limits.five_hour` / `seven_day`（`used_percentage`、`resets_at`） | `codex app-server` 的 `account/rateLimits/read`；退路是 rollout 文件里 `token_count` 事件带的 `rate_limits` |
-| 新鲜度 | Claude Code 每次刷新状态栏都会送来（每轮回复后） | 每两分钟查一次，卡片上可以手动刷新；查一次约 4 秒（起一个 Codex 进程） |
-| 前提 | 接入 statusLine（第 5 节）；只有 Pro / Max 订阅、第一次 API 响应之后才有 | 本机装了并登录 Codex；API key 登录没有额度窗口 |
+| 主动查询 | `claude -p /usage --no-session-persistence --output-format json`：Claude Code 的本地命令，不调模型、不算一轮对话、不留会话记录；解析结果里的 `Current session`（5 小时）和 `Current week (all models)`（7 天）两行，重置时刻按本机时区换算 | `codex app-server` 的 `account/rateLimits/read` |
+| 顺带的来源 | 接入后 statusLine 送来的 `rate_limits`（只在终端界面里跑 Claude Code 时才有） | rollout 文件里 `token_count` 事件带的 `rate_limits`（每轮回复后落盘） |
+| 一次多久 | 约 5 秒（起一个 Claude Code 进程） | 约 1.5–4 秒（起一个 Codex 进程） |
+| 前提 | 本机装了 Claude Code 并用订阅登录（Pro / Max）；API key 登录没有额度 | 本机装了并登录 Codex；API key 登录没有额度窗口 |
 
-- 额度是账号级的，取所有会话里最新的一份。
+- 额度是账号级的。每个 Agent 在"主动查询、扩展点送来的、会话文件里的"几份数据里取**最新**的一份：一轮对话刚结束时，文件里的往往比上次查询新。
+- 什么时候主动查：平时 Codex 每 2 分钟、Claude Code 每 5 分钟；当前标签页正在跑这个 Agent 时每 90 秒；Agent 一轮结束（hooks / notify 写进 spool）后立刻再查一次（两次之间至少隔 30 秒）；卡片上点刷新时两个一起查。查询失败 10 分钟后再试，期间保留上次查到的数据并标出时刻。
+- 主动查询的命令都在 mooncli 自己的 `agent/probe` 目录里运行，`/usage` 不会留下会话记录（Claude Code 只会为这个目录建一个空的项目文件夹）。
 - 窗口按长度认（300 分钟 = 5 小时，10080 分钟 = 7 天），不按套餐写死：Codex Pro 没有 5 小时窗口，缺的窗口显示「–」。
 - 百分比一律用官方给的值，不用 token 数反推。
 - 窗口过了重置时刻还没有新数据时按 0% 显示（官方在窗口过期后也不再下发旧值）。
@@ -100,7 +103,8 @@ Codex  plus
 ```
 
 - 形态：浮动卡片（停在窗口一角，按住标题拖到别的角）、状态栏一段（`Claude 46% · 6%   Codex 1% · 0%`，点击收起或展开卡片）、独立置顶小窗（切到别的程序时也能看到；它没有标签页，不显示上下文）。
-- 缺数据时直说原因：Claude Code 没接入、还没有下一次回复、Codex 查询失败的原因。
+- 卡片右上角三个按钮：刷新（两个 Agent 一起重查）、调节（不透明度、大小小 / 中 / 大、停靠角）、隐藏（点状态栏的额度或命令面板里的"显示 / 隐藏额度卡片"再打开）。
+- 每个 Agent 一栏：正在查询时标"查询中"；缺数据时直说原因（没找到 claude / codex、API key 登录没有额度、查询失败的原因）。
 - 进度条颜色随警告 / 危险阈值变（默认 70% / 90%）；上下文 ≥85% 时提示可以 /compact。
 - 命令面板、历史面板等浮层打开时卡片让位；在「设置 → Agent」里保留，方便调外观时实时预览。
 
@@ -110,12 +114,13 @@ Codex  plus
 
 - 接入 Claude Code / Codex（一键或手动）。
 - 完成提醒：开关（默认开）、正看着时不提醒（默认开）、发送测试通知。
-- 额度卡片：开关（默认关）、浮动卡片显示与否、状态栏摘要、独立小窗、Codex 实时额度（默认开）、codex 位置。
-- 卡片外观：停靠角落、不透明度、警告阈值、危险阈值。
+- 额度卡片：开关（默认关）、浮动卡片显示与否、状态栏摘要、独立小窗、主动查询额度（默认开）、claude 位置、codex 位置。
+- 卡片外观：停靠角落、不透明度、大小、警告阈值、危险阈值。
 
 ## 8. 附录：核实记录（2026-10-22）
 
 - **Claude Code statusLine**（code.claude.com/docs/en/statusline，Claude Code 2.1.302 实测）：`rate_limits.five_hour` / `seven_day` 各带 `used_percentage`、`resets_at`（epoch 秒）；`context_window` 带 `current_usage`（本次请求的 input / cache_creation / cache_read）、`context_window_size`、`used_percentage`，以及会话累计的 `total_input_tokens`。用 `claude --settings <临时文件>` 挂上 bridge 实测，拿到的值和 Claude Code 自己状态栏显示的一致。
+- **Claude Code `/usage`**（2.1.302 实测）：`claude -p "/usage" --output-format json` 的 `num_turns` 为 0、`total_cost_usd` 为 0，`result` 是给人看的几行文字（`Current session: 88% used · resets Oct 26, 2:10pm (Asia/Shanghai)`、`Current week (all models): 19% used · resets Oct 31, 3am (Asia/Shanghai)`，下面还有"哪些会话用得多"的说明）；加 `--no-session-persistence` 后不写会话文件，也不触发 hooks。
 - **Claude Code hooks**：`Stop`、`Notification`（带 `notification_type`、`message`）、`UserPromptSubmit` 的输入都带 `session_id`、`cwd`、`transcript_path`；载荷里没有额度和上下文数字。
 - **Codex app-server**（`codex app-server generate-json-schema` 导出的 v2 协议，codex-cli 0.144.6 实测）：`initialize` → `initialized` → `account/rateLimits/read`，结果的 `rateLimitsByLimitId.codex`（或兼容的 `rateLimits`）带 `primary` / `secondary` 的 `usedPercent`、`windowDurationMins`、`resetsAt`，以及 `planType`。
 - **Codex rollout**（openai/codex 源码 `TokenCountEvent`、`RateLimitSnapshot`）：`~/.codex/sessions/年/月/日/rollout-<时间>-<thread id>.jsonl`，首行 `session_meta` 带 `id`、`cwd`；`token_count` 事件的 `info` 给 `last_token_usage` 和 `model_context_window`，`rate_limits` 是后端下发后落盘的快照。`CODEX_HOME` 可改位置（可逗号分隔多个）。

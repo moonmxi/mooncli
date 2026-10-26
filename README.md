@@ -59,7 +59,7 @@
 ### 开启 Agent 额度与完成提醒
 
 1. 设置（`Ctrl+,`）→ Agent → 接入 Claude Code、接入 Codex。写入前会列出要改的内容，原文件自动备份。
-2. 打开「显示 Agent 额度」。Codex 的额度不接入也能查（通过本机 Codex 的 app-server），Claude Code 的额度要接入后、下一次回复时出现（Pro / Max 订阅）。
+2. 打开「显示 Agent 额度」。额度不接入也能查：mooncli 会直接问本机的 Claude Code（`claude /usage`，Pro / Max 订阅）和 Codex（app-server）。接入是为了完成提醒，以及一轮结束后立刻刷新额度。
 3. 点「发送测试通知」确认右下角能弹出提醒。
 
 细节见 [docs/07](docs/07-agent-monitor.md)。
