@@ -172,25 +172,21 @@ fn claude_hook() {
     }
 }
 
-/// 发一条提醒：在 mooncli 的标签页里就交给主程序（它知道你是不是正看着那个标签页），
-/// 否则自己弹系统通知；设置里关了提醒就什么都不做。
+/// 发一条提醒：交给 mooncli 主程序（它知道你是不是正看着那个标签页，决定弹不弹）。
+/// 不在 mooncli 的标签页里、或者设置里关了提醒，就什么都不做。
 fn deliver(dir: &Path, mut alert: Alert) {
     let prefs = bridge_config(dir).get("notify").cloned().unwrap_or(Value::Null);
     if prefs.get("enabled").and_then(Value::as_bool) == Some(false) {
         return;
     }
-    let ancestors = notify::ancestors();
-    let in_mooncli = tab_session_id().is_some() && ancestors.iter().any(|(_, name)| name == "mooncli.exe");
-    if in_mooncli {
-        alert.tab_session_id = tab_session_id();
-        let _ = notify::write_alert(dir, &alert);
+    // 只提醒跑在 mooncli 标签页里的 Agent。Claude Code 的 hooks、Codex 的 notify 是全局配置，
+    // Claude 桌面版、IDE 插件、别的终端里的会话也会调到这里，它们一律不提醒
+    let Some(tab) = tab_session_id() else { return };
+    if !notify::ancestors().iter().any(|(_, name)| name == "mooncli.exe") {
         return;
     }
-    let quiet = prefs.get("quietWhenFocused").and_then(Value::as_bool) != Some(false);
-    if quiet && notify::foreground_is_ancestor(&ancestors) {
-        return;
-    }
-    toast(dir, &alert.title, &alert.body);
+    alert.tab_session_id = Some(tab);
+    let _ = notify::write_alert(dir, &alert);
 }
 
 /// 自己弹通知。先确认通知身份登记过：没登记的话 Windows 会悄悄丢掉通知，

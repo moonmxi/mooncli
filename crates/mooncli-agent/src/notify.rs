@@ -1,10 +1,10 @@
 //! 完成提醒（docs/07 第 7 节）：Claude Code 一轮结束、要你确认，Codex 一轮结束时，弹 Windows 系统通知。
 //!
 //! 事件来自官方扩展点：Claude Code 的 Stop / Notification hooks、Codex 的 notify（agent-turn-complete）。
-//! mooncli-bridge 收到后分两种情况：
-//! - Agent 跑在 mooncli 的标签页里（祖先进程里有 mooncli）：把提醒写进 `alerts/` 交给主程序。
-//!   主程序知道你是不是正看着那个标签页，看着就不打扰；没看着才弹通知，点通知切到那个标签页。
-//! - 跑在别的终端里：bridge 自己弹通知；你正看着那个终端窗口时不弹（可在设置里关掉这个判断）。
+//! 只提醒跑在 mooncli 标签页里的 Agent（祖先进程里有 mooncli、带着 MOONCLI_SESSION_ID）：
+//! bridge 把提醒写进 `alerts/` 交给主程序。主程序知道你是不是正看着那个标签页，看着就不打扰；
+//! 没看着才弹通知，点通知切到那个标签页。hooks / notify 是全局配置，Claude 桌面版、IDE 插件、
+//! 别的终端里的会话也会调到 bridge，它们只记数据、不提醒。
 
 use std::path::{Path, PathBuf};
 
@@ -272,28 +272,6 @@ pub fn ancestors() -> Vec<(u32, String)> {
 #[cfg(not(windows))]
 pub fn ancestors() -> Vec<(u32, String)> {
     Vec::new()
-}
-
-/// 前台窗口是不是某个祖先进程的（也就是你正看着跑这个 Agent 的终端）。
-#[cfg(windows)]
-pub fn foreground_is_ancestor(ancestors: &[(u32, String)]) -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-    // SAFETY: 只读查询
-    let pid = unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_null() {
-            return false;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, &mut pid);
-        pid
-    };
-    pid != 0 && ancestors.iter().any(|(p, _)| *p == pid)
-}
-
-#[cfg(not(windows))]
-pub fn foreground_is_ancestor(_ancestors: &[(u32, String)]) -> bool {
-    false
 }
 
 #[cfg(test)]

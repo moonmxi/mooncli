@@ -318,7 +318,7 @@ impl Default for Agent {
 #[serde(rename_all = "camelCase", default)]
 pub struct AgentNotify {
     pub enabled: bool,
-    /// 你正看着那个标签页（或运行 Agent 的终端窗口）时不弹
+    /// 你正看着那个标签页时不弹
     pub quiet_when_focused: bool,
 }
 

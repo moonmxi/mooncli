@@ -59,9 +59,9 @@ Claude Code 的空闲提醒（`idle_prompt`，一轮结束后又等了一阵）�
   - 你正看着这个标签页：不打扰（「正看着时不提醒」可以关）；
   - 窗口在前台但在看别的标签页：标签上亮点，窗口里出一条提示；
   - 窗口不在前台：弹系统通知，点一下拉起 mooncli 并切到那个标签页。
-- **跑在别的终端里**（Windows Terminal、VS Code……）：bridge 自己弹系统通知；前台窗口正是运行 Agent 的那个终端时不弹。
+- **不在 mooncli 的标签页里**（Claude 桌面版、IDE 插件、Windows Terminal……）：不提醒。hooks 和 notify 是全局配置，这些地方的会话也会调到 bridge，bridge 只照常记下数据（额度、上下文要用），不写提醒、不弹通知。
 
-系统通知用 WinRT 的 ToastNotification（`tauri-winrt-notification`），身份是 `dev.moonmxi.mooncli`：主程序启动时、bridge 弹通知前都会在 `HKCU\Software\Classes\AppUserModelId\dev.moonmxi.mooncli` 登记名字和图标。没有这一步时，开发版、便携版发出的通知会被 Windows 悄悄丢掉。
+系统通知用 WinRT 的 ToastNotification（`tauri-winrt-notification`），身份是 `dev.moonmxi.mooncli`：主程序启动时（以及命令行排查用的 `mooncli-bridge test-toast`）会在 `HKCU\Software\Classes\AppUserModelId\dev.moonmxi.mooncli` 登记名字和图标。没有这一步时，开发版、便携版发出的通知会被 Windows 悄悄丢掉。
 
 ## 5. mooncli-bridge 与接入
 

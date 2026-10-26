@@ -26,11 +26,11 @@ export function AgentSection({ s, update, backend }: { s: AppSettings; update: U
       <Group title="完成提醒">
         <Row
           label="一轮结束时提醒"
-          desc="Claude Code、Codex 一轮跑完或要你确认（Claude Code 要权限）时，右下角弹一条系统通知，点一下回到那个标签页。需要先在上面接入。"
+          desc="在 mooncli 标签页里运行的 Claude Code、Codex 一轮跑完或要你确认（Claude Code 要权限）时，右下角弹一条系统通知，点一下回到那个标签页。Claude 桌面版、IDE 插件、别的终端里的会话不提醒。需要先在上面接入。"
         >
           <Toggle label="完成提醒" value={a.notify.enabled} onChange={(v) => update((d) => (d.agent.notify.enabled = v))} />
         </Row>
-        <Row label="正看着时不提醒" desc="你正看着运行 Agent 的那个标签页（或别的终端窗口）时不弹，只在你切走以后提醒。">
+        <Row label="正看着时不提醒" desc="你正看着运行 Agent 的那个标签页时不弹，只在你切走以后提醒。">
           <Toggle label="正看着时不提醒" value={a.notify.quietWhenFocused} onChange={(v) => update((d) => (d.agent.notify.quietWhenFocused = v))} />
         </Row>
         <Row label="试一下" desc="发一条测试通知。没看到的话，检查 Windows 设置 → 系统 → 通知里 mooncli 和「请勿打扰」。">

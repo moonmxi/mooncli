@@ -280,11 +280,11 @@ pub fn start_alerts(app: tauri::AppHandle) {
     });
 }
 
-/// 把提醒偏好写进 bridge-config：bridge 在 mooncli 外面运行时照着它决定弹不弹。
+/// 把提醒开关写进 bridge-config：关了提醒时 bridge 连提醒文件都不写。
 pub fn sync_notify_prefs(state: &AppState) {
     let prefs = state.typed_settings().agent.notify;
     let mut cfg = read_bridge_config(state);
-    let want = json!({ "enabled": prefs.enabled, "quietWhenFocused": prefs.quiet_when_focused });
+    let want = json!({ "enabled": prefs.enabled });
     if cfg.get("notify") != Some(&want) {
         cfg["notify"] = want;
         let _ = write_bridge_config(state, &cfg);
