@@ -4,6 +4,9 @@ import { useSettings } from "../state/settings";
 import type { MenuEntry } from "../state/ui";
 import type { Theme } from "../theme/theme";
 
+import { tabIconLabels } from "./Icons";
+import { useUi } from "../state/ui";
+
 const COLOR_NAMES: Record<TabColor, string> = {
   red: "红",
   yellow: "黄",
@@ -39,6 +42,15 @@ export function makeTabActions(opts: {
       return [
         { label: "重命名", icon: "edit", hint: "F2", onSelect: () => st().setEditing(tab.id) },
         { label: tab.pinned ? "取消置顶" : "置顶", icon: "pin", onSelect: () => st().togglePin(tab.id) },
+        { label: "更换图标", icon: tab.icon ?? "palette", onSelect: () => {
+          const ui = useUi.getState();
+          ui.openMenu(ui.lastMenuAt.x, ui.lastMenuAt.y, [
+            { label: "跟随程序", icon: "pwsh", onSelect: () => st().setIcon(tab.id) },
+            ...Object.entries(tabIconLabels).map(([icon, label]) => ({
+              label, icon, hint: tab.icon === icon ? "✓" : undefined, onSelect: () => st().setIcon(tab.id, icon),
+            })),
+          ]);
+        } },
         { label: "复制标签页", icon: "duplicate", hint: "同一目录", onSelect: () => opts.newTab(tab.cwd) },
         {
           label: "颜色",

@@ -76,7 +76,7 @@ export const useUi = create<UiState>((set) => ({
   setFind(id) {
     set({ findId: id });
   },
-  agentHidden: false,
+  agentHidden: true,
   toggleAgentHidden() {
     set((s) => ({ agentHidden: !s.agentHidden }));
   },

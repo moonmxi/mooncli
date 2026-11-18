@@ -18,6 +18,8 @@ import { useUi } from "../state/ui";
 import { xtermTheme, type Theme } from "../theme/theme";
 import { CommandBlocks } from "./blocks";
 import { FindBar } from "./FindBar";
+import { readRemoteFrame, readRemoteUsage } from "../agent/remote";
+import { guardComposition } from "./composition";
 import { RemoteInput } from "./remoteInput";
 
 interface TermEntry {
@@ -176,6 +178,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
     term.loadAddon(search);
     term.loadAddon(new WebLinksAddon());
     term.open(el);
+    const releaseIme = guardComposition(el);
     // 字符宽度：优先用完整的 Unicode 15 字素簇规则（组合 emoji、国旗、肤色修饰都算一个宽字符），不行就退回 Unicode 11
     try {
       term.loadAddon(new UnicodeGraphemesAddon());
@@ -208,6 +211,29 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
     const apply = useStore.getState().apply;
     const launch = useStore.getState().tabs.find((t) => t.id === id)?.launch;
     const remoteInput = new RemoteInput(term);
+    term.parser.registerOscHandler(6974, (data) => {
+      const st = useStore.getState();
+      if (live.current.settings.agent.enabled && st.tabs.find((t) => t.id === id)?.remote) {
+        const account = readRemoteFrame(data, Math.floor(Date.now() / 1000));
+        if (account) st.remoteUsage(id, account);
+      }
+      return true;
+    });
+    let quotaTimer: ReturnType<typeof setTimeout> | undefined;
+    term.onWriteParsed(() => {
+      const remote = useStore.getState().tabs.find((t) => t.id === id)?.remote;
+      if (!remote || !live.current.settings.agent.enabled || quotaTimer !== undefined) return;
+      quotaTimer = setTimeout(() => {
+        quotaTimer = undefined;
+        const st = useStore.getState();
+        const current = st.tabs.find((t) => t.id === id)?.remote;
+        if (!current || current.since !== remote.since || !live.current.settings.agent.enabled) return;
+        const buf = term.buffer.active;
+        const rows = Array.from({ length: term.rows }, (_, i) => buf.getLine(buf.baseY + i)?.translateToString(true) ?? "");
+        const account = readRemoteUsage(rows, Math.floor(Date.now() / 1000));
+        if (account) st.remoteUsage(id, account);
+      }, 80);
+    });
     /** 远程相关的消息：顺手维护"输入起点"，命令开始时把屏幕上的文字读出来 */
     const onRemote = (msg: SessionMsg): SessionMsg => {
       switch (msg.type) {
@@ -329,11 +355,17 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       return { x: screen.left + (sel.end.x - 0.5) * cw, y: screen.top + row * ch };
     };
 
-    const copySelection = (x?: number, y?: number) => {
+    const copySelection = async (x?: number, y?: number) => {
       const s = live.current.settings;
-      const text = cleanCopy(term.getSelection(), s.terminal.trimTrailingWhitespace);
+      const selection = term.getSelection();
+      const text = cleanCopy(selection, s.terminal.trimTrailingWhitespace);
       if (!text) return;
-      backend.clipboardWrite(text).catch(() => {});
+      try {
+        await backend.clipboardWrite(text);
+      } catch (error) {
+        useUi.getState().showNotice("复制失败：" + String(error));
+        return;
+      }
       if (s.terminal.copyToast) {
         const p =
           x !== undefined && y !== undefined
@@ -343,7 +375,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
               : selectionEndPoint();
         useUi.getState().showCopyToast(p.x, p.y, text);
       }
-      if (!s.terminal.copyOnSelect) term.clearSelection();
+      if (!s.terminal.copyOnSelect && term.getSelection() === selection) term.clearSelection();
     };
 
     // ---- 粘贴：剪贴板从 Rust 端读，WebView 不会弹权限提示 ----
@@ -353,29 +385,25 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       if (s.terminal.confirmMultilinePaste && /\r?\n./.test(text) && !term.modes.bracketedPasteMode) setPaste(text);
       else term.paste(text);
     };
-    const pasteFromClipboard = () => backend.clipboardRead().then(doPaste).catch(() => {});
+    const pasteFromClipboard = () => backend.clipboardRead().then(doPaste)
+      .catch((error) => useUi.getState().showNotice("粘贴失败：" + String(error)));
 
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      if (isAppShortcut(e, live.current.settings.keys, keyContext(id))) return false;
-      const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
-      const k = e.key.toLowerCase();
-      // Ctrl+C：有选中内容时复制，没有时照常发中断信号
-      if (ctrl && !e.shiftKey && k === "c" && term.hasSelection()) {
-        copySelection();
-        return false;
-      }
-      if (ctrl && e.shiftKey && k === "c") {
-        copySelection();
-        return false;
-      }
-      if ((ctrl && k === "v") || (e.shiftKey && !e.ctrlKey && e.key === "Insert")) {
-        e.preventDefault();
-        pasteFromClipboard();
-        return false;
-      }
-      return true;
-    });
+    const clipboardKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.altKey || e.metaKey) return;
+      const copy = e.ctrlKey && (e.code === "KeyC" || e.key.toLowerCase() === "c");
+      const paste = (e.ctrlKey && (e.code === "KeyV" || e.key.toLowerCase() === "v")) ||
+        (e.shiftKey && !e.ctrlKey && e.key === "Insert");
+      if (!paste && !(copy && (term.hasSelection() || e.shiftKey))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if (paste) void pasteFromClipboard();
+      else if (term.hasSelection()) void copySelection();
+      else useUi.getState().showNotice("按住 Shift 拖选终端文字，再复制");
+    };
+    el.addEventListener("keydown", clipboardKey, true);
+    term.attachCustomKeyEventHandler((e) =>
+      e.type !== "keydown" || !isAppShortcut(e, live.current.settings.keys, keyContext(id)));
 
     // 其它途径的粘贴（输入法、拖放文字）也走同一套确认逻辑
     const onPaste = (e: ClipboardEvent) => {
@@ -421,7 +449,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       if (term.hasSelection()) copySelection(e.clientX, e.clientY);
       else pasteFromClipboard();
     };
-    el.addEventListener("contextmenu", onContext);
+    el.addEventListener("contextmenu", onContext, true);
 
     // ---- Ctrl+滚轮：只调终端字号（docs/03 §2） ----
     const onWheel = (e: WheelEvent) => {
@@ -459,7 +487,10 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       clearTimeout(resizeTimer);
       el.removeEventListener("mouseup", onMouseUp);
       el.removeEventListener("paste", onPaste, true);
-      el.removeEventListener("contextmenu", onContext);
+      el.removeEventListener("contextmenu", onContext, true);
+      el.removeEventListener("keydown", clipboardKey, true);
+      releaseIme();
+      clearTimeout(quotaTimer);
       el.removeEventListener("wheel", onWheel, { capture: true });
       el.removeEventListener("focusin", onFocusIn);
       blocks.dispose();

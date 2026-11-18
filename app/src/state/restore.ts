@@ -14,6 +14,7 @@ export interface SavedTab {
   name?: string;
   pinned?: boolean;
   color?: TabColor;
+  icon?: string;
   /** 第一个窗格就是标签页自己 */
   panes: SavedPane[];
   /** 分屏布局，叶子是 panes 的下标 */
@@ -55,6 +56,7 @@ export function snapshot(tabs: Tab[], activeId?: string): SavedSession {
         name: t.title.user,
         pinned: t.pinned || undefined,
         color: t.color,
+        icon: t.icon,
         panes,
         tree: t.split ? saveNode(t.split.tree, ids) : undefined,
         focus: t.split ? ids.indexOf(t.split.focus) : undefined,
@@ -76,7 +78,7 @@ export function rebuild(saved: SavedSession, makeId: () => string = newTabId): {
       const base: Tab = { id: ids[i], profile: "日常", title: {}, shellState: "unknown", initialCwd: p.cwd, cwd: p.cwd };
       tabs.push(
         i === 0
-          ? { ...base, title: { user: st.name }, pinned: st.pinned, color: st.color, split }
+          ? { ...base, title: { user: st.name }, pinned: st.pinned, color: st.color, icon: st.icon, split }
           : { ...base, paneOf: split ? ids[0] : undefined },
       );
     });

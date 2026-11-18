@@ -43,7 +43,7 @@ export function levelOf(ratio: number, warnAt: number, dangerAt: number): Level 
 
 /** 窗口过了重置点还没新数据：按已重置算 0%（官方此时也不再下发旧值） */
 export function shownPercent(w: RateWindow, nowSec: number): number {
-  return w.resetsAt !== undefined && w.resetsAt <= nowSec ? 0 : w.usedPercent;
+  return w.resetsAt !== undefined && w.resetsAt <= nowSec ? 0 : Math.min(100, Math.max(0, w.usedPercent));
 }
 
 export function accountFor(report: UsageReport | null, kind: AgentKind): AgentAccountUsage | undefined {

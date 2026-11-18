@@ -501,27 +501,30 @@ async fn history_prune(app: tauri::AppHandle, days: u32) -> CmdResult<usize> {
 
 fn with_clipboard<T>(
     state: &State<'_, AppState>,
-    f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+    mut f: impl FnMut(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
 ) -> CmdResult<T> {
     let mut guard = state.clipboard.lock().unwrap();
     if guard.is_none() {
         *guard = Some(arboard::Clipboard::new().map_err(|e| format!("打不开剪贴板：{e}"))?);
     }
-    f(guard.as_mut().unwrap()).map_err(|e| format!("剪贴板出错：{e}"))
+    let clipboard = guard.as_mut().unwrap();
+    for _ in 0..3 {
+        match f(clipboard) {
+            Err(arboard::Error::ClipboardOccupied) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            result => return result.map_err(|e| format!("剪贴板出错：{e}")),
+        }
+    }
+    f(clipboard).map_err(|e| format!("剪贴板出错：{e}"))
 }
 
 #[tauri::command]
 fn clipboard_read(state: State<'_, AppState>) -> CmdResult<String> {
-    match with_clipboard(&state, |c| c.get_text()) {
-        Ok(t) => Ok(t),
-        // 剪贴板里是图片或者是空的
-        Err(_) => Ok(String::new()),
-    }
+    with_clipboard(&state, |c| c.get_text())
 }
 
 #[tauri::command]
 fn clipboard_write(state: State<'_, AppState>, text: String) -> CmdResult<()> {
-    with_clipboard(&state, |c| c.set_text(text))
+    with_clipboard(&state, |c| c.set_text(text.as_str()))
 }
 
 // ---- 背景图 ------------------------------------------------------------------

@@ -149,7 +149,7 @@ export function TabItem({
       }}
     >
       <span className="ico">
-        <Icon name={kindIcon(kind)} />
+        <Icon name={tab.icon ?? kindIcon(kind)} />
         {tab.pinned && density !== "collapsed" && <span className="pin-mark" aria-label="已置顶" />}
       </span>
       {editing && density !== "collapsed" ? (

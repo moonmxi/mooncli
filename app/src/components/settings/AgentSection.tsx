@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import type { AppSettings } from "../../state/settings";
 import type { Backend, IntegrationAction, IntegrationStatus, IntegrationTarget } from "../../backend/types";
+import remoteMonitor from "../../agent/remote-monitor.py?raw";
 import { claudeSnippet, codexSnippet } from "../../agent/manual";
 import { useUi } from "../../state/ui";
 import { Group, Row, Segmented, Stepper, TextInput, Toggle } from "./controls";
@@ -54,8 +55,11 @@ export function AgentSection({ s, update, backend }: { s: AppSettings; update: U
               { value: "floating", label: "显示" },
               { value: "off", label: "不显示" },
             ]}
-            onChange={(v) => update((d) => (d.agent.widget.style = v))}
+            onChange={(v) => { update((d) => (d.agent.widget.style = v)); useUi.getState().setAgentHidden(false); }}
           />
+        </Row>
+        <Row label="远程额度" desc="SSH 或 WSL 中，在 Claude Code 打开 /usage、在 Codex 打开 /status。当前窗格从额度页读取已用比例。持续刷新可复制采集命令，在对应远端的 Bash 提示符执行（需要 Python 3）。">
+          <button type="button" className="btn" onClick={() => backend.clipboardWrite("python3 -c '" + remoteMonitor.replaceAll("'", "'\\''") + "' </dev/null &").then(() => useUi.getState().showNotice("已复制远程额度采集命令"), (e) => useUi.getState().showNotice(String(e)))}>复制采集命令</button>
         </Row>
         <Row label="状态栏摘要" desc="状态栏右侧显示「Claude 46% · 6%   Codex 1% · 0%」（5 小时 · 7 天），点击可以临时收起浮动卡片。">
           <Toggle label="状态栏摘要" value={a.widget.statusBar} onChange={(v) => update((d) => (d.agent.widget.statusBar = v))} />

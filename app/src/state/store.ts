@@ -1,6 +1,6 @@
 // 标签页和界面布局的状态。字段含义见 docs/06-smart-tabs.md §7。
 import { create } from "zustand";
-import type { ProgramKind, SessionMsg, ShellState } from "../backend/types";
+import type { AgentAccountUsage, ProgramKind, SessionMsg, ShellState } from "../backend/types";
 import { paneLeaves, removePane, SIDEBAR, splitPaneTree, type PaneNode } from "../layout/layout";
 import { guessKind, kindFromChain, type TitleParts } from "./title";
 
@@ -39,6 +39,7 @@ export interface Tab {
   pinned?: boolean;
   /** 标签颜色，取主题的 ANSI 色名 */
   color?: TabColor;
+  icon?: string;
   /** 分屏：这个会话是哪个标签页里的一个窗格（不出现在标签列表里） */
   paneOf?: string;
   /** 分屏：标签页自己（列表里那一项）记录窗格树和获得焦点的窗格 */
@@ -49,6 +50,7 @@ export interface Tab {
 export const MAX_PANES = 4;
 
 export interface RemoteInfo {
+  accounts?: AgentAccountUsage[];
   host: string;
   user?: string;
   via?: string;
@@ -98,7 +100,7 @@ export function listView(tabs: Tab[], tab: Tab): Tab {
   if (!tab.split) return tab;
   const v = paneView(tabs, tab)!;
   const attention = paneLeaves(tab.split.tree).map((id) => tabs.find((t) => t.id === id)?.attention).find(Boolean);
-  return { ...v, id: tab.id, paneOf: undefined, split: tab.split, pinned: tab.pinned, color: tab.color, title: { ...v.title, user: tab.title.user }, attention };
+  return { ...v, id: tab.id, paneOf: undefined, split: tab.split, pinned: tab.pinned, color: tab.color, icon: tab.icon, title: { ...v.title, user: tab.title.user }, attention };
 }
 
 /** 一个标签页的全部窗格 id（含自己），按排列顺序 */
@@ -134,6 +136,8 @@ interface State {
   togglePin(id: string): void;
   /** 拖动排序：把 id 放到 target 的位置（从上往下拖放在它后面，从下往上拖放在它前面）。置顶的和没置顶的各排各的 */
   moveTab(id: string, target: string): void;
+  remoteUsage(id: string, account: AgentAccountUsage): void;
+  setIcon(id: string, icon?: string): void;
   setColor(id: string, color?: TabColor): void;
   apply(id: string, msg: SessionMsg, now?: number): void;
   rememberOpenWidth(w: number): void;
@@ -237,6 +241,7 @@ export const useStore = create<State>((set, get) => {
                   split,
                   pinned: owner.pinned,
                   color: owner.color,
+                  icon: owner.icon,
                   title: { ...s.tabs.find((x) => x.id === heir)!.title, user: owner.title.user },
                 }
               : t.paneOf === owner.id
@@ -332,6 +337,14 @@ export const useStore = create<State>((set, get) => {
       patch(id, (t) => ({ pinned: !t.pinned }));
     },
 
+    remoteUsage(id, account) {
+      patch(id, (t) => t.remote ? { remote: { ...t.remote, accounts: [
+        ...(t.remote.accounts ?? []).filter((a) => a.kind !== account.kind), account,
+      ] } } : {});
+    },
+    setIcon(id, icon) {
+      patch(id, () => ({ icon }));
+    },
     setColor(id, color) {
       patch(id, () => ({ color }));
     },

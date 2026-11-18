@@ -54,6 +54,10 @@
       "type": "number",
       "default": 1
     },
+    "timeZone": {
+      "type": "string",
+      "default": "America/Chicago"
+    },
     "font": {
       "type": "object",
       "properties": {
@@ -333,7 +337,7 @@
                 "floating",
                 "off"
               ],
-              "default": "floating"
+              "default": "off"
             },
             "statusBar": {
               "type": "boolean",

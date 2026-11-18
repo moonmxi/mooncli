@@ -1,6 +1,14 @@
 // 线性单色图标，1.5px 线宽，颜色跟随文字（docs/08 §6）。
 import type { ProgramKind } from "../backend/types";
 
+import { Atom, Blocks, Bot, Braces, Cloud, Database, Flame, GitBranch, Orbit, Rocket, Server, Sparkles } from "lucide-react";
+
+const customIcons = { Atom, Blocks, Bot, Braces, Cloud, Database, Flame, GitBranch, Orbit, Rocket, Server, Sparkles };
+export const tabIconLabels: Record<keyof typeof customIcons, string> = {
+  Atom: "原子", Blocks: "模块", Bot: "助手", Braces: "代码", Cloud: "云", Database: "数据库",
+  Flame: "火焰", GitBranch: "分支", Orbit: "轨道", Rocket: "火箭", Server: "服务器", Sparkles: "星光",
+};
+
 const paths: Record<string, string> = {
   moon: "M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z M9 12l2 2-2 2 M13 16h3",
   pwsh: "M5 8l4 4-4 4 M11 16h7",
@@ -43,6 +51,10 @@ const paths: Record<string, string> = {
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
+  if (Object.hasOwn(customIcons, name)) {
+    const Glyph = customIcons[name as keyof typeof customIcons];
+    return <Glyph size={size} strokeWidth={1.5} className={className} aria-hidden="true" />;
+  }
   return (
     <svg
       className={className}

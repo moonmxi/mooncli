@@ -26,7 +26,7 @@ export function AgentWindowApp() {
     return () => clearInterval(t);
   }, [backend]);
   useEffect(() => applyTheme(theme), [theme]);
-  useEffect(() => (loaded ? startUsagePolling(backend) : undefined), [loaded, backend]);
+  useEffect(() => (loaded && settings.agent.enabled ? startUsagePolling(backend) : undefined), [loaded, settings.agent.enabled, backend]);
 
   return <AgentWindowView backend={backend} onClose={() => backend.window.close()} />;
 }

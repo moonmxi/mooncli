@@ -19,6 +19,7 @@ export interface AppSettings {
   zoom: number;
   /** 只缩放标题栏、侧栏、状态栏、面板 */
   uiScale: number;
+  timeZone: string;
   font: { family: string; size: number; lineHeight: number; weight: string; weightBold: string };
   background: {
     /** null：不用背景图；"builtin:xxx"：内置；其它：用户导入的文件名 */
@@ -95,6 +96,7 @@ export const DEFAULTS: AppSettings = {
   theme: { light: "moon-paper", dark: "night-voyage", follow: "off" },
   zoom: 1,
   uiScale: 1,
+  timeZone: "America/Chicago",
   font: { family: DEFAULT_FONT_FAMILY, size: 14, lineHeight: 1.2, weight: "normal", weightBold: "bold" },
   background: {
     image: null,
@@ -131,7 +133,7 @@ export const DEFAULTS: AppSettings = {
     claudePath: null,
     codexPath: null,
     notify: { enabled: true, quietWhenFocused: true },
-    widget: { style: "floating", statusBar: true, anchor: "bottom-right", opacity: 0.95, scale: 1, warnAt: 0.7, dangerAt: 0.9 },
+    widget: { style: "off", statusBar: true, anchor: "bottom-right", opacity: 0.95, scale: 1, warnAt: 0.7, dangerAt: 0.9 },
   },
   notifications: { taskbar: true, system: true },
   completion: { pinnedRequestsPwsh: false },

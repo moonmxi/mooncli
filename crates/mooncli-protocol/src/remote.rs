@@ -183,6 +183,14 @@ fn parse_ssh(args: &[&str]) -> Option<ConnectTarget> {
     Some(target("ssh", dest, user))
 }
 
+fn interactive_agent(args: &[&str], program: &str) -> bool {
+    matches!(program_name(program).as_str(), "claude" | "codex")
+        && !args
+            .iter()
+            .skip(1)
+            .any(|arg| matches!(*arg, "-p" | "--print" | "exec" | "app-server" | "--version" | "--help"))
+}
+
 fn parse_wsl(args: &[&str]) -> Option<ConnectTarget> {
     let mut distro = None;
     let mut i = 0;
@@ -194,6 +202,10 @@ fn parse_wsl(args: &[&str]) -> Option<ConnectTarget> {
             }
             "-u" | "--user" | "--cd" => i += 2,
             "~" => i += 1,
+            "-e" | "--exec" | "--" if args.get(i + 1).is_some_and(|cmd| interactive_agent(&args[i + 1..], cmd)) => {
+                break;
+            }
+            cmd if interactive_agent(&args[i..], cmd) => break,
             // 执行命令（wsl ls、wsl -e …）、管理发行版（--shutdown、--list）都不算进入 shell
             _ => return None,
         }
@@ -459,6 +471,9 @@ mod tests {
         assert_eq!(host("mosh me@box").unwrap().1, "box");
         assert_eq!(host("wsl").unwrap().1, "WSL");
         assert_eq!(host("wsl -d Ubuntu-22.04").unwrap().1, "Ubuntu-22.04");
+        assert_eq!(host("wsl -d TestBox --exec claude --resume").unwrap().1, "TestBox");
+        assert_eq!(host("wsl -- codex").unwrap().0, "wsl");
+        assert_eq!(host("wsl -e claude -p hello"), None);
         assert_eq!(host("wsl ls"), None);
         assert_eq!(host("wsl --shutdown"), None);
         assert_eq!(host("docker exec -it web bash").unwrap().1, "web");

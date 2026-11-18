@@ -36,6 +36,7 @@ jobs:
       # CI 和程序里内嵌的 PowerShell 脚本先在这里检查语法，免得发版本时才发现（docs/10 §5）
       - name: 检查内嵌的 PowerShell 脚本
         run: python3 tools/check_ps_scripts.py
+      - run: python3 tools/test_remote_monitor.py
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

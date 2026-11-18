@@ -62,7 +62,7 @@ export function StatusBar({ tab, bp, size, backendKind, zoom }: Props) {
       {bp !== "sm" && <span>{size}</span>}
       <span className="r">
         <StatusSegment />
-        {zoom !== 1 && <span title="整体缩放，Ctrl+0 恢复">{Math.round(zoom * 100)}%</span>}
+        {zoom !== 1 && <span title="整体缩放，Ctrl+0 恢复">缩放 {Math.round(zoom * 100)}%</span>}
         {backendKind === "demo" && <span>演示后端</span>}
       </span>
     </footer>

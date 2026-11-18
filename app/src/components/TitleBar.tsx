@@ -1,4 +1,5 @@
 // 自定义标题栏：品牌、（顶部布局时的）标签、命令面板入口、窗口按钮。空白处可拖动窗口。
+import { ZoneClock } from "./ZoneClock";
 import type { Backend } from "../backend/types";
 import type { Breakpoint } from "../layout/layout";
 import { useSettings } from "../state/settings";
@@ -56,7 +57,7 @@ export function TitleBar({ backend, bp, showMenu, topTabs, now, actions }: Props
                 useUi.getState().openMenu(e.clientX, e.clientY, actions.tabMenu(t));
               }}
             >
-              <Icon name={kindIcon(t.running?.kind ?? (t.remote ? "ssh" : "pwsh"))} />
+              <Icon name={t.icon ?? kindIcon(t.running?.kind ?? (t.remote ? "ssh" : "pwsh"))} />
               {!t.pinned && <span className="ttl">{t.title.user ?? displayTitle(t)}</span>}
               <TabStatus tab={t} now={now} showDuration={false} />
             </div>
@@ -67,6 +68,7 @@ export function TitleBar({ backend, bp, showMenu, topTabs, now, actions }: Props
         </div>
       )}
       <div className="spacer" data-tauri-drag-region />
+      <ZoneClock now={now} />
       <button type="button" className={`cmdbox${narrow || topTabs ? " compact" : ""}`} title="命令面板 (Ctrl+Shift+P)" onClick={() => setPalette(true)}>
         <Icon name="search" />
         <span className="t">搜索操作或历史命令</span>

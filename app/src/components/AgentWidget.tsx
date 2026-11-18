@@ -9,6 +9,15 @@ import { useSettings, type AppSettings } from "../state/settings";
 import { Icon } from "./Icons";
 import { useUi } from "../state/ui";
 
+import { focusedTab, useStore } from "../state/store";
+import { remoteReport } from "../agent/remote";
+
+function useDisplayedUsage() {
+  const local = useUsage((s) => s.report);
+  const remote = useStore((s) => focusedTab(s)?.remote);
+  return remote ? remoteReport(remote.accounts ?? [], Math.floor(Date.now() / 1000)) : local;
+}
+
 type Anchor = AppSettings["agent"]["widget"]["anchor"];
 
 function Bar({ ratio, level }: { ratio: number; level: Level }) {
@@ -169,7 +178,7 @@ interface CardProps {
 
 /** 卡片本体：各形态共用 */
 export function UsageCard({ backend, onDragStart, floating }: CardProps) {
-  const report = useUsage((s) => s.report);
+  const report = useDisplayedUsage();
   const fetchedAt = useUsage((s) => s.fetchedAt);
   const refreshing = useUsage((s) => s.refreshing);
   const { warnAt, dangerAt } = useSettings((s) => s.settings.agent.widget);
@@ -188,6 +197,7 @@ export function UsageCard({ backend, onDragStart, floating }: CardProps) {
     claude: errors.claude ?? (liveQuota ? "还没有数据" : "打开「主动查询额度」后显示（设置 → Agent）"),
     codex: errors.codex ?? (liveQuota ? "还没有数据" : "还没有 Codex 的额度数据"),
   };
+  const remote = useStore((s) => focusedTab(s)?.remote);
   const current = report?.current;
   const ctx = current?.context;
   const ctxLevel = ctx ? levelOf(ctx.usedPercent / 100, warnAt, dangerAt) : "ok";
@@ -196,9 +206,9 @@ export function UsageCard({ backend, onDragStart, floating }: CardProps) {
   return (
     <>
       <header className={`aw-head${onDragStart ? " draggable" : ""}`} onPointerDown={onDragStart}>
-        <strong>Agent 额度</strong>
+        <strong>{remote ? remote.host + " · " : ""}Agent 额度</strong>
         <span className="aw-tools">
-          {liveQuota && (
+          {liveQuota && !remote && (
             <button
               type="button"
               className={`aw-tool${refreshing ? " spin" : ""}`}
@@ -277,7 +287,7 @@ export function AgentWidget({ backend }: { backend: Backend }) {
   // 浮层打开时让位（命令面板、历史面板、其它设置节）；在 Agent 设置节里保留，方便调外观时实时预览
   const overlayOpen = useUi((s) => s.paletteOpen || s.historyOpen || (s.settings.open && s.settings.section !== "agent"));
   const hidden = useUi((s) => s.agentHidden);
-  const report = useUsage((s) => s.report);
+  const report = useDisplayedUsage();
   const ref = useRef<HTMLElement>(null);
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
 
@@ -319,22 +329,26 @@ export function AgentWidget({ backend }: { backend: Backend }) {
 /** 状态栏里的一段：两个 Agent 的 5 小时 · 7 天额度。点一下显示 / 隐藏浮动卡片 */
 export function StatusSegment() {
   const settings = useSettings((s) => s.settings);
-  const report = useUsage((s) => s.report);
+  const report = useDisplayedUsage();
   const fetchedAt = useUsage((s) => s.fetchedAt);
-  if (!settings.agent.enabled || !settings.agent.widget.statusBar || !report || report.accounts.length === 0) return null;
+  const remote = useStore((s) => focusedTab(s)?.remote);
+  if (!settings.agent.enabled || !settings.agent.widget.statusBar) return null;
   const nowSec = Math.floor(Math.max(Date.now(), fetchedAt) / 1000);
   const text = KINDS.map((k) => compactSummary(accountFor(report, k), nowSec))
     .filter(Boolean)
-    .join("   ");
+    .join("   ") || (remote ? remote.host + " · 等待 /usage 或 /status" : "Agent 额度 · 暂无数据");
   const { warnAt, dangerAt } = settings.agent.widget;
   return (
     <button
       type="button"
-      className={`status-btn status-agent ${levelOf(worstPercent(report.accounts, nowSec) / 100, warnAt, dangerAt)}`}
+      className={`status-btn status-agent ${levelOf(worstPercent(report?.accounts ?? [], nowSec) / 100, warnAt, dangerAt)}`}
       title={settings.agent.widget.style === "floating" ? "Agent 额度（5 小时 · 7 天），点击显示 / 隐藏卡片" : "Agent 额度（5 小时 · 7 天）"}
       onClick={() => {
         // 浮动卡片设成不显示时，点状态栏直接打开它
-        if (settings.agent.widget.style !== "floating") useSettings.getState().update((d) => (d.agent.widget.style = "floating"));
+        if (settings.agent.widget.style !== "floating") {
+          useSettings.getState().update((d) => (d.agent.widget.style = "floating"));
+          useUi.getState().setAgentHidden(false);
+        }
         else useUi.getState().toggleAgentHidden();
       }}
     >

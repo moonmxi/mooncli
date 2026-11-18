@@ -166,7 +166,7 @@ export interface HostCount {
 export type AgentKind = "claude" | "codex";
 
 /** 数据从哪来：statusLine = Claude Code 官方扩展点；live = codex app-server 实时查询；sessionFile = 会话文件里的快照 */
-export type SnapshotSource = "statusLine" | "live" | "sessionFile";
+export type SnapshotSource = "statusLine" | "live" | "sessionFile" | "terminal";
 
 export interface RateWindow {
   /** 已用百分比 0–100（官方数据，不自行推算） */

@@ -126,3 +126,7 @@ Codex  plus
 - **Codex app-server**（`codex app-server generate-json-schema` 导出的 v2 协议，codex-cli 0.144.6 实测）：`initialize` → `initialized` → `account/rateLimits/read`，结果的 `rateLimitsByLimitId.codex`（或兼容的 `rateLimits`）带 `primary` / `secondary` 的 `usedPercent`、`windowDurationMins`、`resetsAt`，以及 `planType`。
 - **Codex rollout**（openai/codex 源码 `TokenCountEvent`、`RateLimitSnapshot`）：`~/.codex/sessions/年/月/日/rollout-<时间>-<thread id>.jsonl`，首行 `session_meta` 带 `id`、`cwd`；`token_count` 事件的 `info` 给 `last_token_usage` 和 `model_context_window`，`rate_limits` 是后端下发后落盘的快照。`CODEX_HOME` 可改位置（可逗号分隔多个）。
 - **Codex notify**：用户级 config.toml 顶层的 `notify` 数组，事件 JSON 作为最后一个参数传入；交互模式和 `codex exec` 都会在一轮结束时发 `agent-turn-complete`（带 `thread-id`、`cwd`、`last-assistant-message`），不等待子进程。源码里定性为 legacy，所以额度不依赖它，它只负责提醒和关联标签页。
+
+## SSH 与 WSL 额度
+
+开启 Agent 额度后，右下角显示摘要。点击摘要可展开卡片。远程窗格读取当前连接里的额度：在 Claude Code 打开 `/usage` 或在 Codex 打开 `/status`，打开额度页即可更新。要持续刷新，在设置 → Agent 复制采集命令，在目标 Bash 提示符执行。采集器使用 Python 3，每五分钟查询该环境已安装的 CLI，通过当前 PTY 回传数值；退出这个 Shell 后结束。十分钟内没有更新时，摘要提示重新获取。

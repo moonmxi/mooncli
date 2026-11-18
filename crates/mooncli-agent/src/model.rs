@@ -72,7 +72,8 @@ impl AccountUsage {
         let mut five_hour = None;
         let mut seven_day = None;
         for (w, default_long) in [(primary, false), (secondary, true)] {
-            let Some(w) = w else { continue };
+            let Some(mut w) = w else { continue };
+            w.used_percent = w.used_percent.clamp(0.0, 100.0);
             let long = w.window_minutes.map(|m| m > 300).unwrap_or(default_long);
             let slot = if long { &mut seven_day } else { &mut five_hour };
             if slot.is_none() {
