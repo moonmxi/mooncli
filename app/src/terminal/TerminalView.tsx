@@ -178,7 +178,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
     term.loadAddon(search);
     term.loadAddon(new WebLinksAddon());
     term.open(el);
-    const releaseIme = guardComposition(el);
+    const ime = guardComposition(el, (text) => term.input(text, true));
     // 字符宽度：优先用完整的 Unicode 15 字素簇规则（组合 emoji、国旗、肤色修饰都算一个宽字符），不行就退回 Unicode 11
     try {
       term.loadAddon(new UnicodeGraphemesAddon());
@@ -314,6 +314,7 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       );
 
     term.onData((d) => {
+      if (!ime.acceptTerminal(d)) return;
       remoteInput.onInput(d);
       backend.write(id, d);
     });
@@ -378,27 +379,59 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       if (!s.terminal.copyOnSelect && term.getSelection() === selection) term.clearSelection();
     };
 
-    // ---- 粘贴：剪贴板从 Rust 端读，WebView 不会弹权限提示 ----
+    // ---- 粘贴：优先使用当前手势的剪贴板快照 ----
     const doPaste = (text: string) => {
-      if (!text) return;
+      if (!text || !ime.acceptPaste(text)) return;
       const s = live.current.settings;
       if (s.terminal.confirmMultilinePaste && /\r?\n./.test(text) && !term.modes.bracketedPasteMode) setPaste(text);
       else term.paste(text);
     };
-    const pasteFromClipboard = () => backend.clipboardRead().then(doPaste)
-      .catch((error) => useUi.getState().showNotice("粘贴失败：" + String(error)));
+    // A native paste event carries the clipboard snapshot taken at the user's gesture.
+    // Some WebView shortcuts produce no paste event. Read the system clipboard only for those.
+    let gesture: { delivered: boolean } | undefined;
+    let pasteTimer: ReturnType<typeof setTimeout>;
+    const fallbackPaste = async (g: { delivered: boolean }) => {
+      try {
+        const text = await backend.clipboardRead();
+        if (alive && g === gesture && !g.delivered) { g.delivered = true; doPaste(text); }
+      } catch (error) {
+        if (alive && g === gesture && !g.delivered) useUi.getState().showNotice("粘贴失败：" + String(error));
+      }
+    };
+    const pasteFromClipboard = () => {
+      clearTimeout(pasteTimer);
+      const g = beginPaste();
+      term.focus();
+      try { document.execCommand("paste"); } catch { /* use system clipboard below */ }
+      if (g.delivered) return;
+      void fallbackPaste(g);
+    };
 
+    const clearGesture = () => { gesture = undefined; clearTimeout(pasteTimer); };
+    let gestureExpiry: ReturnType<typeof setTimeout>;
+    const beginPaste = () => {
+      clearGesture();
+      clearTimeout(gestureExpiry);
+      const g = gesture = { delivered: false };
+      gestureExpiry = setTimeout(() => { if (gesture === g) clearGesture(); }, 1500);
+      return g;
+    };
     const clipboardKey = (e: KeyboardEvent) => {
       if (e.isComposing || e.altKey || e.metaKey) return;
       const copy = e.ctrlKey && (e.code === "KeyC" || e.key.toLowerCase() === "c");
       const paste = (e.ctrlKey && (e.code === "KeyV" || e.key.toLowerCase() === "v")) ||
         (e.shiftKey && !e.ctrlKey && e.key === "Insert");
       if (!paste && !(copy && (term.hasSelection() || e.shiftKey))) return;
-      e.preventDefault();
       e.stopPropagation();
+      if (paste && !e.repeat) {
+        clearTimeout(pasteTimer);
+        const g = beginPaste();
+        pasteTimer = setTimeout(() => { if (!g.delivered) void fallbackPaste(g); }, 80);
+        return; // Allow the WebView's native paste default action.
+      }
+      e.preventDefault();
       if (e.repeat) return;
-      if (paste) void pasteFromClipboard();
-      else if (term.hasSelection()) void copySelection();
+      if (term.hasSelection()) void copySelection();
       else useUi.getState().showNotice("按住 Shift 拖选终端文字，再复制");
     };
     el.addEventListener("keydown", clipboardKey, true);
@@ -409,7 +442,12 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      doPaste(e.clipboardData?.getData("text/plain") ?? "");
+      const text = e.clipboardData?.getData("text/plain");
+      if (text) {
+        clearTimeout(pasteTimer);
+        if (!gesture?.delivered) doPaste(text);
+        if (gesture) { gesture.delivered = true; clearGesture(); }
+      } else if (!gesture) void fallbackPaste(beginPaste());
     };
     el.addEventListener("paste", onPaste, true);
 
@@ -489,7 +527,9 @@ export function TerminalView({ id, active, visible, split, rect, theme, backend,
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("contextmenu", onContext, true);
       el.removeEventListener("keydown", clipboardKey, true);
-      releaseIme();
+      clearGesture();
+      clearTimeout(gestureExpiry);
+      ime.dispose();
       clearTimeout(quotaTimer);
       el.removeEventListener("wheel", onWheel, { capture: true });
       el.removeEventListener("focusin", onFocusIn);

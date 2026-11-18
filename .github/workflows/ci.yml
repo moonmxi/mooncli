@@ -128,6 +128,10 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
+      - name: WebView2 系统剪贴板与输入法回放
+        timeout-minutes: 3
+        run: node tools/test_windows_input.mjs
+
       - name: 整理安装包
         shell: pwsh
         run: |
