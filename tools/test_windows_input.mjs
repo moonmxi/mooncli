@@ -28,9 +28,11 @@ const installDir = join(dir, "install");
 execFileSync(join(bundle,installer), ["/S", "/D=" + installDir], {windowsHide:true, timeout:60000});
 const exe = join(installDir,"mooncli.exe");
 await access(exe);
-const app = spawn(exe, [], { windowsHide:true, env:{
-  ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:"--remote-debugging-port=19222",
-}});
+// Elevated Windows runners require an app-specific machine policy for WebView2 automation.
+const policy = "HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments";
+execFileSync("reg", ["add", policy, "/v", "mooncli.exe", "/t", "REG_SZ", "/d",
+  "--remote-debugging-port=19222", "/f"], {windowsHide:true});
+const app = spawn(exe, [], {windowsHide:true, stdio:"inherit"});
 let ws;
 try {
   const target = await until(async () => (await (await fetch("http://127.0.0.1:19222/json/list")).json())
@@ -94,6 +96,7 @@ try {
   assert.deepEqual(result.split(/\r?\n/),["纯文本 clipboard","语音甲","语音乙"]);
   console.log("WebView2 -> ConPTY: Windows clipboard and both IME commits received exactly once.");
 } finally {
+  execFileSync("reg", ["delete", policy, "/v", "mooncli.exe", "/f"], {windowsHide:true});
   ws?.close();
   if (app.exitCode === null) {
     const exited = new Promise(resolve => app.once("exit",resolve));
